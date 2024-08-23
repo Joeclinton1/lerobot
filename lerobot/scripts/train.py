@@ -13,6 +13,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import sys; sys.path.insert(0, "/home/jclinton/compsci/lerobot")
+
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -48,8 +50,8 @@ from lerobot.common.utils.utils import (
     init_logging,
     set_global_seed,
 )
-from lerobot.scripts.eval import eval_policy
 
+from lerobot.scripts.eval import eval_policy
 
 def make_optimizer_and_scheduler(cfg, policy):
     if cfg.policy.name == "act":
@@ -204,6 +206,8 @@ def log_eval_info(logger, info, step, cfg, dataset, is_online):
     eval_s = info["eval_s"]
     avg_sum_reward = info["avg_sum_reward"]
     pc_success = info["pc_success"]
+    avg_max_reward = info["avg_max_reward"]
+    avg_final_reward = info["avg_final_reward"]
 
     # A sample is an (observation,action) pair, where observation and action
     # can be on multiple timestamps. In a batch, we have `batch_size`` number of samples.
@@ -219,7 +223,9 @@ def log_eval_info(logger, info, step, cfg, dataset, is_online):
         f"ep:{format_big_number(num_episodes)}",
         # number of time all unique samples are seen
         f"epch:{num_epochs:.2f}",
-        f"∑rwrd:{avg_sum_reward:.3f}",
+        f"∑rwrd_S:{avg_sum_reward:.3f}",
+        f"∑rwrd_M:{avg_max_reward:.3f}",
+        f"∑rwrd_F:{avg_final_reward:.3f}",
         f"success:{pc_success:.1f}%",
         f"eval_s:{eval_s:.3f}",
     ]
@@ -348,7 +354,7 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
         _num_digits = max(6, len(str(cfg.training.offline_steps + cfg.training.online_steps)))
         step_identifier = f"{step:0{_num_digits}d}"
 
-        if cfg.training.eval_freq > 0 and step % cfg.training.eval_freq == 0:
+        if cfg.training.eval_freq > 0 and step % cfg.training.eval_freq == 0 or step == 1:
             logging.info(f"Eval policy at step {step}")
             with torch.no_grad(), torch.autocast(device_type=device.type) if cfg.use_amp else nullcontext():
                 assert eval_env is not None

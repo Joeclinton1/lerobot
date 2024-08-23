@@ -243,6 +243,7 @@ def eval_policy(
     # Keep track of some metrics.
     sum_rewards = []
     max_rewards = []
+    final_rewards = []
     all_successes = []
     all_seeds = []
     threads = []  # for video saving threads
@@ -293,7 +294,7 @@ def eval_policy(
         n_steps = rollout_data["done"].shape[1]
         # Note: this relies on a property of argmax: that it returns the first occurrence as a tiebreaker.
         done_indices = torch.argmax(rollout_data["done"].to(int), dim=1)
-
+        success_indices = torch.argmax(rollout_data["success"].to(int), dim=1)
         # Make a mask with shape (batch, n_steps) to mask out rollout data after the first done
         # (batch-element-wise). Note the `done_indices + 1` to make sure to keep the data from the done step.
         mask = (torch.arange(n_steps) <= einops.repeat(done_indices + 1, "b -> b s", s=n_steps)).int()
@@ -302,6 +303,9 @@ def eval_policy(
         sum_rewards.extend(batch_sum_rewards.tolist())
         batch_max_rewards = einops.reduce((rollout_data["reward"] * mask), "b n -> b", "max")
         max_rewards.extend(batch_max_rewards.tolist())
+        print(rollout_data["reward"][0], done_indices, success_indices)
+        batch_final_rewards = rollout_data["reward"][:, done_indices]
+        final_rewards.extend(batch_final_rewards.tolist())
         batch_successes = einops.reduce((rollout_data["success"] * mask), "b n -> b", "any")
         all_successes.extend(batch_successes.tolist())
         if seeds:
@@ -366,13 +370,15 @@ def eval_policy(
                 "episode_ix": i,
                 "sum_reward": sum_reward,
                 "max_reward": max_reward,
+                "final_reward": final_reward,
                 "success": success,
                 "seed": seed,
             }
-            for i, (sum_reward, max_reward, success, seed) in enumerate(
+            for i, (sum_reward, max_reward, final_reward, success, seed) in enumerate(
                 zip(
                     sum_rewards[:n_episodes],
                     max_rewards[:n_episodes],
+                    final_rewards[:n_episodes],
                     all_successes[:n_episodes],
                     all_seeds[:n_episodes],
                     strict=True,
@@ -382,6 +388,7 @@ def eval_policy(
         "aggregated": {
             "avg_sum_reward": float(np.nanmean(sum_rewards[:n_episodes])),
             "avg_max_reward": float(np.nanmean(max_rewards[:n_episodes])),
+            "avg_final_reward": float(np.nanmean(final_rewards[:n_episodes])),
             "pc_success": float(np.nanmean(all_successes[:n_episodes]) * 100),
             "eval_s": time.time() - start,
             "eval_ep_s": (time.time() - start) / n_episodes,
@@ -490,7 +497,6 @@ def main(
             enable_progbar=True,
             enable_inner_progbar=True,
         )
-    print(info["aggregated"])
 
     # Save info
     with open(Path(out_dir) / "eval_info.json", "w") as f:
