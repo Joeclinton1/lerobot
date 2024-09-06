@@ -102,6 +102,7 @@ For simulations, 🤗 LeRobot comes with gymnasium environments that can be inst
 - [aloha](https://github.com/huggingface/gym-aloha)
 - [xarm](https://github.com/huggingface/gym-xarm)
 - [pusht](https://github.com/huggingface/gym-pusht)
+- [blockpush](https://github.com/huggingface/gym-blockpush)
 
 For instance, to install 🤗 LeRobot with aloha and pusht, use:
 ```bash
@@ -128,7 +129,7 @@ wandb login
 |   |   └── policy         # various policies: act.yaml, diffusion.yaml, tdmpc.yaml
 |   ├── common           # contains classes and utilities
 |   |   ├── datasets       # various datasets of human demonstrations: aloha, pusht, xarm
-|   |   ├── envs           # various sim environments: aloha, pusht, xarm
+|   |   ├── envs           # various sim environments: aloha, pusht, xarm, blockpush
 |   |   ├── policies       # various policies: act, diffusion, tdmpc
 |   |   ├── robot_devices  # various real devices: dynamixel motors, opencv cameras, koch robots
 |   |   └── utils          # various utilities

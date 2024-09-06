@@ -39,6 +39,12 @@ python lerobot/scripts/push_dataset_to_hub.py \
 --raw-dir data/umi_cup_in_the_wild_raw \
 --raw-format umi_zarr \
 --repo-id lerobot/umi_cup_in_the_wild
+
+python lerobot/scripts/push_dataset_to_hub.py \
+--raw-dir data/blockpush_raw \
+--raw-format blockpush_zarr \
+--repo-id lerobot/blockpush
+--video 0
 ```
 """
 
@@ -72,6 +78,8 @@ def get_from_raw_to_lerobot_format_fn(raw_format: str):
         from lerobot.common.datasets.push_dataset_to_hub.xarm_pkl_format import from_raw_to_lerobot_format
     elif raw_format == "cam_png":
         from lerobot.common.datasets.push_dataset_to_hub.cam_png_format import from_raw_to_lerobot_format
+    elif raw_format == "blockpush_zarr":
+        from lerobot.common.datasets.push_dataset_to_hub.blockpush_zarr_format import from_raw_to_lerobot_format
     else:
         raise ValueError(
             f"The selected {raw_format} can't be found. Did you add it to `lerobot/scripts/push_dataset_to_hub.py::get_from_raw_to_lerobot_format_fn`?"
@@ -249,7 +257,8 @@ def push_dataset_to_hub(
     if local_dir is None:
         # clear cache
         shutil.rmtree(meta_data_dir)
-        shutil.rmtree(videos_dir)
+        if video:
+            shutil.rmtree(videos_dir)
 
     return lerobot_dataset
 

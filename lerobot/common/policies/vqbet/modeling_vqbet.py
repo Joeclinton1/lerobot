@@ -52,9 +52,9 @@ class VQBeTPolicy(
     name = "vqbet"
 
     def __init__(
-        self,
-        config: VQBeTConfig | None = None,
-        dataset_stats: dict[str, dict[str, Tensor]] | None = None,
+            self,
+            config: VQBeTConfig | None = None,
+            dataset_stats: dict[str, dict[str, Tensor]] | None = None,
     ):
         """
         Args:
@@ -79,7 +79,9 @@ class VQBeTPolicy(
 
         self.vqbet = VQBeTModel(config)
 
+        # Only keep image keys that exist in the input shapes, else leave the list empty
         self.expected_image_keys = [k for k in config.input_shapes if k.startswith("observation.image")]
+        self.has_images = len(self.expected_image_keys) > 0  # Check if images are part of the observation
 
         self.reset()
 
@@ -89,24 +91,25 @@ class VQBeTPolicy(
         queues are populated during rollout of the policy, they contain the n latest observations and actions
         """
         self._queues = {
-            "observation.images": deque(maxlen=self.config.n_obs_steps),
             "observation.state": deque(maxlen=self.config.n_obs_steps),
+            "observation.environment_state": deque(maxlen=self.config.n_obs_steps),
             "action": deque(maxlen=self.config.action_chunk_size),
         }
 
+        if self.has_images:
+            self._queues["observation.images"] = deque(maxlen=self.config.n_obs_steps)
+
     @torch.no_grad
     def select_action(self, batch: dict[str, Tensor]) -> Tensor:
-        """Select a single action given environment observations.
-
-        This method wraps `select_actions` in order to return one action at a time for execution in the
-        environment. It works by managing the actions in a queue and only calling `select_actions` when the
-        queue is empty.
-        """
+        """Select a single action given environment observations."""
 
         batch = self.normalize_inputs(batch)
         batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
-        batch["observation.images"] = torch.stack([batch[k] for k in self.expected_image_keys], dim=-4)
-        # Note: It's important that this happens after stacking the images into a single key.
+
+        # Only process images if they exist
+        if self.has_images:
+            batch["observation.images"] = torch.stack([batch[k] for k in self.expected_image_keys], dim=-4)
+
         self._queues = populate_queues(self._queues, batch)
 
         if not self.vqbet.action_head.vqvae_model.discretized.item():
@@ -121,7 +124,8 @@ class VQBeTPolicy(
 
             # the dimension of returned action is (batch_size, action_chunk_size, action_dim)
             actions = self.unnormalize_outputs({"action": actions})["action"]
-            # since the data in the action queue's dimension is (action_chunk_size, batch_size, action_dim), we transpose the action and fill the queue
+            # since the data in the action queue's dimension is (action_chunk_size, batch_size, action_dim),
+            # we transpose the action and fill the queue
             self._queues["action"].extend(actions.transpose(0, 1))
 
         action = self._queues["action"].popleft()
@@ -129,15 +133,18 @@ class VQBeTPolicy(
 
     def forward(self, batch: dict[str, Tensor]) -> dict[str, Tensor]:
         """Run the batch through the model and compute the loss for training or validation."""
+
         batch = self.normalize_inputs(batch)
         batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
-        batch["observation.images"] = torch.stack([batch[k] for k in self.expected_image_keys], dim=-4)
+
+        # Only process images if they exist
+        if self.has_images:
+            batch["observation.images"] = torch.stack([batch[k] for k in self.expected_image_keys], dim=-4)
+
         batch = self.normalize_targets(batch)
-        # VQ-BeT discretizes action using VQ-VAE before training BeT (please refer to section 3.2 in the VQ-BeT paper https://arxiv.org/pdf/2403.03181)
+
+        # VQ-BeT discretizes action using VQ-VAE before training BeT
         if not self.vqbet.action_head.vqvae_model.discretized.item():
-            # loss: total loss of training RVQ
-            # n_different_codes: how many of the total possible VQ codes are being used in single batch (how many of them have at least one encoder embedding as a nearest neighbor). This can be at most `vqvae_n_embed * number of layers of RVQ (=2)`.
-            # n_different_combinations: how many different code combinations are being used out of all possible combinations in single batch. This can be at most `vqvae_n_embed ^ number of layers of RVQ (=2)` (hint consider the RVQ as a decision tree).
             loss, n_different_codes, n_different_combinations, recon_l1_error = (
                 self.vqbet.action_head.discretize(self.config.n_vqvae_training_steps, batch["action"])
             )
@@ -147,7 +154,8 @@ class VQBeTPolicy(
                 "n_different_combinations": n_different_combinations,
                 "recon_l1_error": recon_l1_error,
             }
-        # if Residual VQ is already trained, VQ-BeT trains its GPT and bin prediction head / offset prediction head parts.
+
+        # If Residual VQ is already trained, VQ-BeT trains its GPT and bin prediction head / offset prediction head parts.
         _, loss_dict = self.vqbet(batch, rollout=False)
 
         return loss_dict
@@ -287,19 +295,22 @@ class VQBeTModel(nn.Module):
         super().__init__()
         self.config = config
 
-        self.rgb_encoder = VQBeTRgbEncoder(config)
+        self.use_image_obs = len([k for k in config.input_shapes if k.startswith("observation.image")])==1
+        self.rgb_encoder = VQBeTRgbEncoder(config) if self.use_image_obs else None
         self.num_images = len([k for k in config.input_shapes if k.startswith("observation.image")])
         # This action query token is used as a prompt for querying action chunks. Please refer to "A_Q" in the image above.
         # Note: During the forward pass, this token is repeated as many times as needed. The authors also experimented with initializing the necessary number of tokens independently and observed inferior results.
         self.action_token = nn.Parameter(torch.randn(1, 1, self.config.gpt_input_dim))
 
         # To input state and observation features into GPT layers, we first project the features to fit the shape of input size of GPT.
-        self.state_projector = MLP(
-            config.input_shapes["observation.state"][0], hidden_channels=[self.config.gpt_input_dim]
-        )
+        input_size = config.input_shapes["observation.state"][0] + \
+                     config.input_shapes.get("observation.environment_state", [0])[0]
+
+        self.state_projector = MLP(input_size, hidden_channels=[self.config.gpt_input_dim])
+
         self.rgb_feature_projector = MLP(
             self.rgb_encoder.feature_dim, hidden_channels=[self.config.gpt_input_dim]
-        )
+        ) if self.use_image_obs else None
 
         # GPT part of VQ-BeT
         self.policy = GPT(config)
@@ -315,29 +326,39 @@ class VQBeTModel(nn.Module):
 
     def forward(self, batch: dict[str, Tensor], rollout: bool) -> Tensor:
         # Input validation.
-        assert set(batch).issuperset({"observation.state", "observation.images"})
+        assert set(batch).issuperset({"observation.state"})
         batch_size, n_obs_steps = batch["observation.state"].shape[:2]
         assert n_obs_steps == self.config.n_obs_steps
 
-        # Extract image feature (first combine batch and sequence dims).
-        img_features = self.rgb_encoder(
-            einops.rearrange(batch["observation.images"], "b s n ... -> (b s n) ...")
-        )
-        # Separate batch and sequence dims.
-        img_features = einops.rearrange(
-            img_features, "(b s n) ... -> b s n ...", b=batch_size, s=n_obs_steps, n=self.num_images
-        )
+        # Define input_tokens
+        input_tokens = []
 
-        # Arrange prior and current observation step tokens as shown in the class docstring.
-        # First project features to token dimension.
-        rgb_tokens = self.rgb_feature_projector(
-            img_features
-        )  # (batch, obs_step, number of different cameras, projection dims)
-        input_tokens = [rgb_tokens[:, :, i] for i in range(rgb_tokens.size(2))]
-        input_tokens.append(
-            self.state_projector(batch["observation.state"])
-        )  # (batch, obs_step, projection dims)
+        if self.rgb_encoder is not None:
+            # Visual case: Process image features if rgb_encoder is present
+            assert "observation.images" in batch, "Missing observation.images in batch"
+
+            # Extract image feature (first combine batch and sequence dims).
+            img_features = self.rgb_encoder(
+                einops.rearrange(batch["observation.images"], "b s n ... -> (b s n) ...")
+            )
+            # Separate batch and sequence dims.
+            img_features = einops.rearrange(
+                img_features, "(b s n) ... -> b s n ...", b=batch_size, s=n_obs_steps, n=self.num_images
+            )
+            # Project features to token dimension.
+            rgb_tokens = self.rgb_feature_projector(img_features)
+            # Add rgb_tokens to input tokens list.
+            input_tokens += [rgb_tokens[:, :, i] for i in range(rgb_tokens.size(2))]
+
+        # Add state_projected input for observation.state and if applicable observation.environment_state
+        combined_input = torch.cat(
+            [batch["observation.state"], batch["observation.environment_state"]],dim=-1
+        ) if "observation.environment_state" in batch else batch["observation.state"]
+        input_tokens.append(self.state_projector(combined_input))  # (batch, obs_step, projection dims)
+
+        # Append the action token
         input_tokens.append(einops.repeat(self.action_token, "1 1 d -> b n d", b=batch_size, n=n_obs_steps))
+
         # Interleave tokens by stacking and rearranging.
         input_tokens = torch.stack(input_tokens, dim=2)
         input_tokens = einops.rearrange(input_tokens, "b n t d -> b (n t) d")
@@ -345,30 +366,31 @@ class VQBeTModel(nn.Module):
         len_additional_action_token = self.config.n_action_pred_token - 1
         future_action_tokens = self.action_token.repeat(batch_size, len_additional_action_token, 1)
 
-        # add additional action query tokens for predicting future action chunks
+        # Add additional action query tokens for predicting future action chunks.
         input_tokens = torch.cat([input_tokens, future_action_tokens], dim=1)
 
-        # get action features (pass through GPT)
+        # Get action features (pass through GPT).
         features = self.policy(input_tokens)
-        # len(self.config.input_shapes) is the number of different observation modes. this line gets the index of action prompt tokens.
-        historical_act_pred_index = np.arange(0, n_obs_steps) * (len(self.config.input_shapes) + 1) + len(
-            self.config.input_shapes
-        )
 
-        # only extract the output tokens at the position of action query:
-        # Behavior Transformer (BeT), and VQ-BeT are both sequence-to-sequence prediction models, mapping sequential observation to sequential action (please refer to section 2.2 in BeT paper https://arxiv.org/pdf/2206.11251).
-        # Thus, it predict historical action sequence, in addition to current and future actions (predicting future actions : optional).
-        features = torch.cat(
-            [features[:, historical_act_pred_index], features[:, -len_additional_action_token:]], dim=1
-        )
-        # pass through action head
+        # len(self.config.input_shapes) is the number of different observation modes.
+        # This line gets the index of action prompt tokens.
+        num_obs_modes = 2 if self.use_image_obs else 1
+        historical_act_pred_index = np.arange(0, n_obs_steps) * (num_obs_modes + 1) + num_obs_modes
+
+        # Only extract the output tokens at the position of action query:
+        features = features[:, historical_act_pred_index]
+        if len_additional_action_token > 0:
+            features = torch.cat([features, features[:, -len_additional_action_token:]])
+
+        # Pass through action head.
         action_head_output = self.action_head(features)
-        # if rollout, VQ-BeT don't calculate loss
+
+        # If rollout, VQ-BeT doesn't calculate loss.
         if rollout:
             return action_head_output["predicted_action"][:, n_obs_steps - 1, :].reshape(
                 batch_size, self.config.action_chunk_size, -1
             )
-        # else, it calculate overall loss (bin prediction loss, and offset loss)
+        # Else, it calculates overall loss (bin prediction loss, and offset loss).
         else:
             output = batch["action"][:, self.select_target_actions_indices]
             loss = self.action_head.loss_fn(action_head_output, output, reduction="mean")
@@ -454,7 +476,6 @@ class VQBeTHead(nn.Module):
         # we calculate N and T side parallely. Thus, the dimensions would be
         # (batch size * number of action query tokens, action chunk size, action dimension)
         x = einops.rearrange(x, "N T WA -> (N T) WA")
-
         # sample offsets
         cbet_offsets = self.map_to_cbet_preds_offset(x)
         cbet_offsets = einops.rearrange(
@@ -544,6 +565,7 @@ class VQBeTHead(nn.Module):
             "decoded_action": decoded_action,
         }
 
+
     def loss_fn(self, pred, target, **kwargs):
         """
         for given ground truth action values (target), and prediction (pred) this function calculates the overall loss.
@@ -625,24 +647,32 @@ class VQBeTOptimizer(torch.optim.Adam):
             + list(policy.vqbet.action_head.vqvae_model.decoder.parameters())
             + list(policy.vqbet.action_head.vqvae_model.vq_layer.parameters())
         )
+
         decay_params, no_decay_params = policy.vqbet.policy.configure_parameters()
-        decay_params = (
-            decay_params
-            + list(policy.vqbet.rgb_encoder.parameters())
-            + list(policy.vqbet.state_projector.parameters())
-            + list(policy.vqbet.rgb_feature_projector.parameters())
+
+        # Only add rgb_encoder parameters if it's not None
+        if policy.vqbet.rgb_encoder is not None:
+            decay_params += list(policy.vqbet.rgb_encoder.parameters())
+
+        # Only add rgb_feature_projector parameters if it's not None
+        if policy.vqbet.rgb_feature_projector is not None:
+            decay_params += list(policy.vqbet.rgb_feature_projector.parameters())
+
+        # Adding other necessary parameters
+        decay_params += (
+            list(policy.vqbet.state_projector.parameters())
             + [policy.vqbet.action_token]
             + list(policy.vqbet.action_head.map_to_cbet_preds_offset.parameters())
         )
 
+        # Conditional based on the sequential selection
         if cfg.policy.sequentially_select:
-            decay_params = (
-                decay_params
-                + list(policy.vqbet.action_head.map_to_cbet_preds_primary_bin.parameters())
+            decay_params += (
+                list(policy.vqbet.action_head.map_to_cbet_preds_primary_bin.parameters())
                 + list(policy.vqbet.action_head.map_to_cbet_preds_secondary_bin.parameters())
             )
         else:
-            decay_params = decay_params + list(policy.vqbet.action_head.map_to_cbet_preds_bin.parameters())
+            decay_params += list(policy.vqbet.action_head.map_to_cbet_preds_bin.parameters())
 
         optim_groups = [
             {
@@ -661,13 +691,14 @@ class VQBeTOptimizer(torch.optim.Adam):
                 "lr": cfg.training.lr,
             },
         ]
+
+        # Initialize the optimizer using super()
         super().__init__(
             optim_groups,
             cfg.training.lr,
             cfg.training.adam_betas,
             cfg.training.adam_eps,
         )
-
 
 class VQBeTScheduler(nn.Module):
     def __init__(self, optimizer, cfg):
