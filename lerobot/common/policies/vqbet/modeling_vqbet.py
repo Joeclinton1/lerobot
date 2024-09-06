@@ -334,7 +334,7 @@ class VQBeTModel(nn.Module):
         input_tokens = []
 
         if self.rgb_encoder is not None:
-            # Visual case: Process image features if rgb_encoder is present
+            # Process image features if rgb_encoder is present
             assert "observation.images" in batch, "Missing observation.images in batch"
 
             # Extract image feature (first combine batch and sequence dims).
@@ -350,15 +350,13 @@ class VQBeTModel(nn.Module):
             # Add rgb_tokens to input tokens list.
             input_tokens += [rgb_tokens[:, :, i] for i in range(rgb_tokens.size(2))]
 
-        # Add state_projected input for observation.state and if applicable observation.environment_state
+        # Arrange prior and current observation step tokens as shown in the class docstring.
+        # First project features to token dimension.
         combined_input = torch.cat(
             [batch["observation.state"], batch["observation.environment_state"]],dim=-1
         ) if "observation.environment_state" in batch else batch["observation.state"]
         input_tokens.append(self.state_projector(combined_input))  # (batch, obs_step, projection dims)
-
-        # Append the action token
         input_tokens.append(einops.repeat(self.action_token, "1 1 d -> b n d", b=batch_size, n=n_obs_steps))
-
         # Interleave tokens by stacking and rearranging.
         input_tokens = torch.stack(input_tokens, dim=2)
         input_tokens = einops.rearrange(input_tokens, "b n t d -> b (n t) d")
@@ -377,10 +375,15 @@ class VQBeTModel(nn.Module):
         num_obs_modes = 2 if self.use_image_obs else 1
         historical_act_pred_index = np.arange(0, n_obs_steps) * (num_obs_modes + 1) + num_obs_modes
 
-        # Only extract the output tokens at the position of action query:
-        features = features[:, historical_act_pred_index]
+        # only extract the output tokens at the position of action query:
+        # Behavior Transformer (BeT), and VQ-BeT are both sequence-to-sequence prediction models,
+        # mapping sequential observation to sequential action (please refer to section 2.2 in BeT paper https://arxiv.org/pdf/2206.11251).
+        # Thus, it predicts a historical action sequence, in addition to current and future actions (predicting future actions : optional).
         if len_additional_action_token > 0:
-            features = torch.cat([features, features[:, -len_additional_action_token:]])
+            features = torch.cat([features[:, historical_act_pred_index], features[:, -len_additional_action_token:]],
+                                 dim=1)
+        else:
+            features = features[:, historical_act_pred_index]
 
         # Pass through action head.
         action_head_output = self.action_head(features)
