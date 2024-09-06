@@ -52,9 +52,9 @@ class VQBeTPolicy(
     name = "vqbet"
 
     def __init__(
-            self,
-            config: VQBeTConfig | None = None,
-            dataset_stats: dict[str, dict[str, Tensor]] | None = None,
+        self,
+        config: VQBeTConfig | None = None,
+        dataset_stats: dict[str, dict[str, Tensor]] | None = None,
     ):
         """
         Args:
@@ -295,7 +295,7 @@ class VQBeTModel(nn.Module):
         super().__init__()
         self.config = config
 
-        self.use_image_obs = len([k for k in config.input_shapes if k.startswith("observation.image")])==1
+        self.use_image_obs = len([k for k in config.input_shapes if k.startswith("observation.image")]) == 1
         self.rgb_encoder = VQBeTRgbEncoder(config) if self.use_image_obs else None
         self.num_images = len([k for k in config.input_shapes if k.startswith("observation.image")])
         # This action query token is used as a prompt for querying action chunks. Please refer to "A_Q" in the image above.
@@ -303,14 +303,18 @@ class VQBeTModel(nn.Module):
         self.action_token = nn.Parameter(torch.randn(1, 1, self.config.gpt_input_dim))
 
         # To input state and observation features into GPT layers, we first project the features to fit the shape of input size of GPT.
-        input_size = config.input_shapes["observation.state"][0] + \
-                     config.input_shapes.get("observation.environment_state", [0])[0]
+        input_size = (
+            config.input_shapes["observation.state"][0]
+            + config.input_shapes.get("observation.environment_state", [0])[0]
+        )
 
         self.state_projector = MLP(input_size, hidden_channels=[self.config.gpt_input_dim])
 
-        self.rgb_feature_projector = MLP(
-            self.rgb_encoder.feature_dim, hidden_channels=[self.config.gpt_input_dim]
-        ) if self.use_image_obs else None
+        self.rgb_feature_projector = (
+            MLP(self.rgb_encoder.feature_dim, hidden_channels=[self.config.gpt_input_dim])
+            if self.use_image_obs
+            else None
+        )
 
         # GPT part of VQ-BeT
         self.policy = GPT(config)
@@ -352,9 +356,11 @@ class VQBeTModel(nn.Module):
 
         # Arrange prior and current observation step tokens as shown in the class docstring.
         # First project features to token dimension.
-        combined_input = torch.cat(
-            [batch["observation.state"], batch["observation.environment_state"]],dim=-1
-        ) if "observation.environment_state" in batch else batch["observation.state"]
+        combined_input = (
+            torch.cat([batch["observation.state"], batch["observation.environment_state"]], dim=-1)
+            if "observation.environment_state" in batch
+            else batch["observation.state"]
+        )
         input_tokens.append(self.state_projector(combined_input))  # (batch, obs_step, projection dims)
         input_tokens.append(einops.repeat(self.action_token, "1 1 d -> b n d", b=batch_size, n=n_obs_steps))
         # Interleave tokens by stacking and rearranging.
@@ -380,8 +386,9 @@ class VQBeTModel(nn.Module):
         # mapping sequential observation to sequential action (please refer to section 2.2 in BeT paper https://arxiv.org/pdf/2206.11251).
         # Thus, it predicts a historical action sequence, in addition to current and future actions (predicting future actions : optional).
         if len_additional_action_token > 0:
-            features = torch.cat([features[:, historical_act_pred_index], features[:, -len_additional_action_token:]],
-                                 dim=1)
+            features = torch.cat(
+                [features[:, historical_act_pred_index], features[:, -len_additional_action_token:]], dim=1
+            )
         else:
             features = features[:, historical_act_pred_index]
 
@@ -568,7 +575,6 @@ class VQBeTHead(nn.Module):
             "decoded_action": decoded_action,
         }
 
-
     def loss_fn(self, pred, target, **kwargs):
         """
         for given ground truth action values (target), and prediction (pred) this function calculates the overall loss.
@@ -670,9 +676,8 @@ class VQBeTOptimizer(torch.optim.Adam):
 
         # Conditional based on the sequential selection
         if cfg.policy.sequentially_select:
-            decay_params += (
-                list(policy.vqbet.action_head.map_to_cbet_preds_primary_bin.parameters())
-                + list(policy.vqbet.action_head.map_to_cbet_preds_secondary_bin.parameters())
+            decay_params += list(policy.vqbet.action_head.map_to_cbet_preds_primary_bin.parameters()) + list(
+                policy.vqbet.action_head.map_to_cbet_preds_secondary_bin.parameters()
             )
         else:
             decay_params += list(policy.vqbet.action_head.map_to_cbet_preds_bin.parameters())
@@ -702,6 +707,7 @@ class VQBeTOptimizer(torch.optim.Adam):
             cfg.training.adam_betas,
             cfg.training.adam_eps,
         )
+
 
 class VQBeTScheduler(nn.Module):
     def __init__(self, optimizer, cfg):

@@ -15,15 +15,16 @@
 # limitations under the License.
 """Process zarr files formatted for BlockPush dataset (like in https://github.com/real-stanford/diffusion_polic) to LeRobot format"""
 
-import numpy as np
+from pathlib import Path
+
 import torch
 import zarr
-from pathlib import Path
 from datasets import Dataset, Features, Sequence, Value
 
 from lerobot.common.datasets.lerobot_dataset import CODEBASE_VERSION
 from lerobot.common.datasets.push_dataset_to_hub.utils import concatenate_episodes
 from lerobot.common.datasets.utils import calculate_episode_data_index, hf_transform_to_torch
+
 
 def check_format(raw_dir):
     zarr_path = raw_dir / "blockpush_multimodal.zarr"
@@ -36,14 +37,12 @@ def check_format(raw_dir):
 
     required_datasets.remove("meta/episode_ends")
 
-    assert all(nb_frames == zarr_data[dataset].shape[0] for dataset in required_datasets), \
-        "Mismatch in number of frames across datasets"
+    assert all(
+        nb_frames == zarr_data[dataset].shape[0] for dataset in required_datasets
+    ), "Mismatch in number of frames across datasets"
 
-def load_from_raw(
-    raw_dir: Path,
-    fps: int,
-    episodes: list[int] | None = None
-):
+
+def load_from_raw(raw_dir: Path, fps: int, episodes: list[int] | None = None):
     zarr_path = raw_dir / "blockpush_multimodal.zarr"
     zarr_data = zarr.open(zarr_path, mode="r")
 
@@ -64,8 +63,10 @@ def load_from_raw(
         num_frames = to_idx - from_idx
         obs = observations[from_idx:to_idx]
         ep_dict = {
-            "observation.state":obs[:, 6:10], # effector translation and effector target translation
-            "observation.environment_state": torch.cat((obs[:, :6], obs[:, 10:]), dim=-1), # other observation values
+            "observation.state": obs[:, 6:10],  # effector translation and effector target translation
+            "observation.environment_state": torch.cat(
+                (obs[:, :6], obs[:, 10:]), dim=-1
+            ),  # other observation values
             "action": actions[from_idx:to_idx],
             "episode_index": torch.full((num_frames,), ep_idx, dtype=torch.int64),
             "frame_index": torch.arange(num_frames, dtype=torch.int64),
@@ -82,6 +83,7 @@ def load_from_raw(
     data_dict["index"] = torch.arange(len(data_dict["frame_index"]), dtype=torch.int64)
     return data_dict
 
+
 def to_hf_dataset(data_dict):
     features = {
         "observation.state": Sequence(
@@ -90,21 +92,20 @@ def to_hf_dataset(data_dict):
         "observation.environment_state": Sequence(
             length=data_dict["observation.environment_state"].shape[1], feature=Value(dtype="float32")
         ),
-        "action": Sequence(
-            length=data_dict["action"].shape[1], feature=Value(dtype="float32")
-        ),
+        "action": Sequence(length=data_dict["action"].shape[1], feature=Value(dtype="float32")),
         "episode_index": Value(dtype="int64"),
         "frame_index": Value(dtype="int64"),
         "timestamp": Value(dtype="float32"),
         "next.reward": Value(dtype="float32"),
         "next.done": Value(dtype="bool"),
         "next.success": Value(dtype="bool"),
-        "index": Value(dtype="int64")
+        "index": Value(dtype="int64"),
     }
 
     hf_dataset = Dataset.from_dict(data_dict, features=Features(features))
     hf_dataset.set_transform(hf_transform_to_torch)
     return hf_dataset
+
 
 def from_raw_to_lerobot_format(
     raw_dir: Path,
