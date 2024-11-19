@@ -22,7 +22,7 @@ from lerobot.common.robot_devices.utils import RobotDeviceAlreadyConnectedError,
 
 
 def ensure_safe_goal_position(
-    goal_pos: torch.Tensor, present_pos: torch.Tensor, max_relative_target: float | list[float]
+        goal_pos: torch.Tensor, present_pos: torch.Tensor, max_relative_target: float | list[float]
 ):
     # Cap relative action target magnitude for safety.
     diff = goal_pos - present_pos
@@ -51,7 +51,6 @@ class ManipulatorRobotConfig:
     """
 
     # Define all components of the robot
-    robot_type: str = "koch"
     leader_arms: dict[str, MotorsBus] = field(default_factory=lambda: {})
     follower_arms: dict[str, MotorsBus] = field(default_factory=lambda: {})
     cameras: dict[str, Camera] = field(default_factory=lambda: {})
@@ -61,6 +60,8 @@ class ManipulatorRobotConfig:
     # as the number of motors in your follower arms (assumes all follower arms have the same number of
     # motors).
     max_relative_target: list[float] | float | None = None
+
+    SUPPORTED_ROBOT_TYPES = ["koch", "koch_bimanual", "aloha", "so100", "moss"]
 
     # Optionally set the leader arm in torque mode with the gripper motor set to this angle. This makes it
     # possible to squeeze the gripper and have it spring back to an open position on its own. If None, the
@@ -81,8 +82,17 @@ class ManipulatorRobotConfig:
         super().__setattr__(prop, val)
 
     def __post_init__(self):
-        if self.robot_type not in ["koch", "koch_bimanual", "aloha", "so100", "moss"]:
-            raise ValueError(f"Provided robot type ({self.robot_type}) is not supported.")
+        # Check that each arm has a valid `robot_type` and `calibration_dir`
+        for arm_name, arm in {**self.leader_arms, **self.follower_arms}.items():
+            if not hasattr(arm, 'robot_type'):
+                raise ValueError(f"The arm '{arm_name}' is missing the 'robot_type' attribute.")
+            if not hasattr(arm, 'calibration_dir'):
+                raise ValueError(f"The arm '{arm_name}' is missing the 'calibration_dir' attribute.")
+            if arm.robot_type not in self.SUPPORTED_ROBOT_TYPES:
+                raise ValueError(
+                    f"Unsupported robot type '{arm.robot_type}' for arm '{arm_name}'. "
+                    f"Supported types are: {', '.join(self.SUPPORTED_ROBOT_TYPES)}."
+                )
 
 
 class ManipulatorRobot:
@@ -102,35 +112,27 @@ class ManipulatorRobot:
         "main": DynamixelMotorsBus(
             port="/dev/tty.usbmodem575E0031751",
             motors={
-                # name: (index, model)
                 "shoulder_pan": (1, "xl330-m077"),
-                "shoulder_lift": (2, "xl330-m077"),
-                "elbow_flex": (3, "xl330-m077"),
-                "wrist_flex": (4, "xl330-m077"),
-                "wrist_roll": (5, "xl330-m077"),
-                "gripper": (6, "xl330-m077"),
+                # Other motors...
             },
+            robot_type="koch",
+            calibration_dir=Path(".cache/calibration/koch")
         ),
     }
     follower_arms = {
         "main": DynamixelMotorsBus(
             port="/dev/tty.usbmodem575E0032081",
             motors={
-                # name: (index, model)
                 "shoulder_pan": (1, "xl430-w250"),
-                "shoulder_lift": (2, "xl430-w250"),
-                "elbow_flex": (3, "xl330-m288"),
-                "wrist_flex": (4, "xl330-m288"),
-                "wrist_roll": (5, "xl330-m288"),
-                "gripper": (6, "xl330-m288"),
+                # Other motors...
             },
+            robot_type="koch",
+            calibration_dir=Path(".cache/calibration/koch")
         ),
     }
     robot = ManipulatorRobot(
-        robot_type="koch",
-        calibration_dir=".cache/calibration/koch",
         leader_arms=leader_arms,
-        follower_arms=follower_arms,
+        follower_arms=follower_arms
     )
 
     # Connect motors buses and cameras if any (Required)
@@ -208,18 +210,15 @@ class ManipulatorRobot:
     """
 
     def __init__(
-        self,
-        config: ManipulatorRobotConfig | None = None,
-        calibration_dir: Path = ".cache/calibration/koch",
-        **kwargs,
+            self,
+            config: ManipulatorRobotConfig | None = None,
+            **kwargs,
     ):
         if config is None:
             config = ManipulatorRobotConfig()
         # Overwrite config arguments using kwargs
         self.config = replace(config, **kwargs)
-        self.calibration_dir = Path(calibration_dir)
 
-        self.robot_type = self.config.robot_type
         self.leader_arms = self.config.leader_arms
         self.follower_arms = self.config.follower_arms
         self.cameras = self.config.cameras
@@ -257,56 +256,56 @@ class ManipulatorRobot:
             )
 
         # Connect the arms
-        for name in self.follower_arms:
+        for name, arm in self.follower_arms.items():
             print(f"Connecting {name} follower arm.")
-            self.follower_arms[name].connect()
-        for name in self.leader_arms:
+            arm.connect()
+        for name, arm in self.leader_arms.items():
             print(f"Connecting {name} leader arm.")
-            self.leader_arms[name].connect()
+            arm.connect()
 
-        if self.robot_type in ["koch", "koch_bimanual", "aloha"]:
+        # Dynamically select TorqueMode based on the robot type for each arm
+        isFeetech = any([motor[1] in ['sts3215'] for motor in arm.motors.values()])
+        isDynamixel = any([motor[1] in ['xl330-m077', 'xl330-m288', 'xl430-w250'] for motor in arm.motors.values()])
+        if isDynamixel:
             from lerobot.common.robot_devices.motors.dynamixel import TorqueMode
-        elif self.robot_type in ["so100", "moss"]:
+        elif isFeetech:
             from lerobot.common.robot_devices.motors.feetech import TorqueMode
 
-        # We assume that at connection time, arms are in a rest position, and torque can
-        # be safely disabled to run calibration and/or set robot preset configurations.
-        for name in self.follower_arms:
-            self.follower_arms[name].write("Torque_Enable", TorqueMode.DISABLED.value)
-        for name in self.leader_arms:
-            self.leader_arms[name].write("Torque_Enable", TorqueMode.DISABLED.value)
+        # Disable torque for safety during calibration or preset
+        arm.write("Torque_Enable", TorqueMode.DISABLED.value)
 
         self.activate_calibration()
 
-        # Set robot preset (e.g. torque in leader gripper for Koch v1.1)
-        if self.robot_type in ["koch", "koch_bimanual"]:
-            self.set_koch_robot_preset()
-        elif self.robot_type == "aloha":
-            self.set_aloha_robot_preset()
-        elif self.robot_type in ["so100", "moss"]:
-            self.set_so100_robot_preset()
+        # Set robot preset (e.g. torque in leader gripper for specific robot types)
+        for name, arm in self.leader_arms.items():
+            if arm.robot_type in ["koch", "koch_bimanual"]:
+                self.set_koch_robot_preset(arm)
+            elif arm.robot_type == "aloha":
+                self.set_aloha_robot_preset(arm)
+            elif arm.robot_type in ["so100", "moss"]:
+                self.set_so100_robot_preset(arm)
 
         # Enable torque on all motors of the follower arms
-        for name in self.follower_arms:
+        for name, arm in self.follower_arms.items():
             print(f"Activating torque on {name} follower arm.")
-            self.follower_arms[name].write("Torque_Enable", 1)
+            arm.write("Torque_Enable", 1)
 
+        # Set gripper torque if configured
         if self.config.gripper_open_degree is not None:
-            if self.robot_type not in ["koch", "koch_bimanual"]:
-                raise NotImplementedError(
-                    f"{self.robot_type} does not support position AND current control in the handle, which is require to set the gripper open."
-                )
-            # Set the leader arm in torque mode with the gripper motor set to an angle. This makes it possible
-            # to squeeze the gripper and have it spring back to an open position on its own.
-            for name in self.leader_arms:
-                self.leader_arms[name].write("Torque_Enable", 1, "gripper")
-                self.leader_arms[name].write("Goal_Position", self.config.gripper_open_degree, "gripper")
+            for name, arm in self.leader_arms.items():
+                if arm.robot_type not in ["koch", "koch_bimanual"]:
+                    raise NotImplementedError(
+                        f"{arm.robot_type} does not support position AND current control in the handle, "
+                        "which is required to set the gripper open."
+                    )
+                arm.write("Torque_Enable", 1, "gripper")
+                arm.write("Goal_Position", self.config.gripper_open_degree, "gripper")
 
         # Check both arms can be read
-        for name in self.follower_arms:
-            self.follower_arms[name].read("Present_Position")
-        for name in self.leader_arms:
-            self.leader_arms[name].read("Present_Position")
+        for name, arm in self.follower_arms.items():
+            arm.read("Present_Position")
+        for name, arm in self.leader_arms.items():
+            arm.read("Present_Position")
 
         # Connect the cameras
         for name in self.cameras:
@@ -315,33 +314,32 @@ class ManipulatorRobot:
         self.is_connected = True
 
     def activate_calibration(self):
-        """After calibration all motors function in human interpretable ranges.
-        Rotations are expressed in degrees in nominal range of [-180, 180],
-        and linear motions (like gripper of Aloha) in nominal range of [0, 100].
-        """
+        """After calibration all motors function in human-interpretable ranges."""
 
         def load_or_run_calibration_(name, arm, arm_type):
             arm_id = get_arm_id(name, arm_type)
-            arm_calib_path = self.calibration_dir / f"{arm_id}.json"
+            arm_calib_path = arm.calibration_dir / f"{arm_id}.json"
 
             if arm_calib_path.exists():
                 with open(arm_calib_path) as f:
                     calibration = json.load(f)
             else:
-                # TODO(rcadene): display a warning in __init__ if calibration file not available
+                # Display a warning if calibration file is not available
                 print(f"Missing calibration file '{arm_calib_path}'")
 
-                if self.robot_type in ["koch", "koch_bimanual", "aloha"]:
+                # Run calibration based on robot type
+                isFeetech = any([motor[1] in ['sts3215'] for motor in arm.motors.values()])
+                isDynamixel = any([motor[1] in ['xl330-m077', 'xl330-m288', 'xl430-w250'] for motor in arm.motors.values()])
+
+                print(arm.motors, isFeetech, isDynamixel)
+
+                if isDynamixel:
                     from lerobot.common.robot_devices.robots.dynamixel_calibration import run_arm_calibration
-
-                    calibration = run_arm_calibration(arm, self.robot_type, name, arm_type)
-
-                elif self.robot_type in ["so100", "moss"]:
-                    from lerobot.common.robot_devices.robots.feetech_calibration import (
-                        run_arm_manual_calibration,
-                    )
-
-                    calibration = run_arm_manual_calibration(arm, self.robot_type, name, arm_type)
+                    calibration = run_arm_calibration(arm, arm.robot_type, name, arm_type)
+                elif isFeetech:
+                    from lerobot.common.robot_devices.robots.feetech_calibration import \
+                        run_arm_manual_calibration
+                    calibration = run_arm_manual_calibration(arm, arm.robot_type, name, arm_type)
 
                 print(f"Calibration is done! Saving calibration file '{arm_calib_path}'")
                 arm_calib_path.parent.mkdir(parents=True, exist_ok=True)
@@ -357,53 +355,44 @@ class ManipulatorRobot:
             calibration = load_or_run_calibration_(name, arm, "leader")
             arm.set_calibration(calibration)
 
-    def set_koch_robot_preset(self):
+
+    def set_koch_robot_preset(self, arm):
+        """Set Koch robot preset configurations for a specific arm."""
+
         def set_operating_mode_(arm):
             from lerobot.common.robot_devices.motors.dynamixel import TorqueMode
 
             if (arm.read("Torque_Enable") != TorqueMode.DISABLED.value).any():
                 raise ValueError("To run set robot preset, the torque must be disabled on all motors.")
 
-            # Use 'extended position mode' for all motors except gripper, because in joint mode the servos can't
-            # rotate more than 360 degrees (from 0 to 4095) And some mistake can happen while assembling the arm,
-            # you could end up with a servo with a position 0 or 4095 at a crucial point See [
-            # https://emanual.robotis.com/docs/en/dxl/x/x_series/#operating-mode11]
+            # Use 'extended position mode' for all motors except gripper
             all_motors_except_gripper = [name for name in arm.motor_names if name != "gripper"]
             if len(all_motors_except_gripper) > 0:
-                # 4 corresponds to Extended Position on Koch motors
                 arm.write("Operating_Mode", 4, all_motors_except_gripper)
 
-            # Use 'position control current based' for gripper to be limited by the limit of the current.
-            # For the follower gripper, it means it can grasp an object without forcing too much even tho,
-            # it's goal position is a complete grasp (both gripper fingers are ordered to join and reach a touch).
-            # For the leader gripper, it means we can use it as a physical trigger, since we can force with our finger
-            # to make it move, and it will move back to its original target position when we release the force.
-            # 5 corresponds to Current Controlled Position on Koch gripper motors "xl330-m077, xl330-m288"
+            # Set 'position control current based' mode for the gripper motor
             arm.write("Operating_Mode", 5, "gripper")
 
-        for name in self.follower_arms:
-            set_operating_mode_(self.follower_arms[name])
+        # Apply the operating mode settings
+        set_operating_mode_(arm)
 
-            # Set better PID values to close the gap between recorded states and actions
-            # TODO(rcadene): Implement an automatic procedure to set optimial PID values for each motor
-            self.follower_arms[name].write("Position_P_Gain", 1500, "elbow_flex")
-            self.follower_arms[name].write("Position_I_Gain", 0, "elbow_flex")
-            self.follower_arms[name].write("Position_D_Gain", 600, "elbow_flex")
+        # Set better PID values for specific joints
+        if "elbow_flex" in arm.motor_names:
+            arm.write("Position_P_Gain", 1500, "elbow_flex")
+            arm.write("Position_I_Gain", 0, "elbow_flex")
+            arm.write("Position_D_Gain", 600, "elbow_flex")
 
-        if self.config.gripper_open_degree is not None:
-            for name in self.leader_arms:
-                set_operating_mode_(self.leader_arms[name])
+        # Set gripper position if specified
+        if self.config.gripper_open_degree is not None and "gripper" in arm.motor_names:
+            arm.write("Torque_Enable", 1, "gripper")
+            arm.write("Goal_Position", self.config.gripper_open_degree, "gripper")
 
-                # Enable torque on the gripper of the leader arms, and move it to 45 degrees,
-                # so that we can use it as a trigger to close the gripper of the follower arms.
-                self.leader_arms[name].write("Torque_Enable", 1, "gripper")
-                self.leader_arms[name].write("Goal_Position", self.config.gripper_open_degree, "gripper")
 
-    def set_aloha_robot_preset(self):
+    def set_aloha_robot_preset(self, arm):
+        """Set Aloha robot preset configurations for a specific arm."""
+
         def set_shadow_(arm):
-            # Set secondary/shadow ID for shoulder and elbow. These joints have two motors.
-            # As a result, if only one of them is required to move to a certain position,
-            # the other will follow. This is to avoid breaking the motors.
+            # Set secondary/shadow ID for shoulder and elbow if dual-motor setup is present
             if "shoulder_shadow" in arm.motor_names:
                 shoulder_idx = arm.read("ID", "shoulder")
                 arm.write("Secondary_ID", shoulder_idx, "shoulder_shadow")
@@ -412,58 +401,48 @@ class ManipulatorRobot:
                 elbow_idx = arm.read("ID", "elbow")
                 arm.write("Secondary_ID", elbow_idx, "elbow_shadow")
 
-        for name in self.follower_arms:
-            set_shadow_(self.follower_arms[name])
+        # Apply shadow settings for dual-motor joints
+        set_shadow_(arm)
 
-        for name in self.leader_arms:
-            set_shadow_(self.leader_arms[name])
+        # Set a velocity limit if supported
+        if "Velocity_Limit" in arm.motor_names:
+            arm.write("Velocity_Limit", 131)
 
-        for name in self.follower_arms:
-            # Set a velocity limit of 131 as advised by Trossen Robotics
-            self.follower_arms[name].write("Velocity_Limit", 131)
+        # Set 'extended position mode' for all motors except the gripper
+        all_motors_except_gripper = [name for name in arm.motor_names if name != "gripper"]
+        if len(all_motors_except_gripper) > 0:
+            arm.write("Operating_Mode", 4, all_motors_except_gripper)
 
-            # Use 'extended position mode' for all motors except gripper, because in joint mode the servos can't
-            # rotate more than 360 degrees (from 0 to 4095) And some mistake can happen while assembling the arm,
-            # you could end up with a servo with a position 0 or 4095 at a crucial point See [
-            # https://emanual.robotis.com/docs/en/dxl/x/x_series/#operating-mode11]
-            all_motors_except_gripper = [
-                name for name in self.follower_arms[name].motor_names if name != "gripper"
-            ]
-            if len(all_motors_except_gripper) > 0:
-                # 4 corresponds to Extended Position on Aloha motors
-                self.follower_arms[name].write("Operating_Mode", 4, all_motors_except_gripper)
+        # Set 'position control current based' for the gripper if present
+        if "gripper" in arm.motor_names:
+            arm.write("Operating_Mode", 5, "gripper")
 
-            # Use 'position control current based' for follower gripper to be limited by the limit of the current.
-            # It can grasp an object without forcing too much even tho,
-            # it's goal position is a complete grasp (both gripper fingers are ordered to join and reach a touch).
-            # 5 corresponds to Current Controlled Position on Aloha gripper follower "xm430-w350"
-            self.follower_arms[name].write("Operating_Mode", 5, "gripper")
-
-            # Note: We can't enable torque on the leader gripper since "xc430-w150" doesn't have
-            # a Current Controlled Position mode.
-
+        # Warn if `gripper_open_degree` is set, as it's not supported for Aloha robots
         if self.config.gripper_open_degree is not None:
             warnings.warn(
-                f"`gripper_open_degree` is set to {self.config.gripper_open_degree}, but None is expected for Aloha instead",
+                f"`gripper_open_degree` is set to {self.config.gripper_open_degree}, "
+                "but None is expected for Aloha instead.",
                 stacklevel=1,
             )
 
-    def set_so100_robot_preset(self):
-        for name in self.follower_arms:
-            # Mode=0 for Position Control
-            self.follower_arms[name].write("Mode", 0)
-            # Set P_Coefficient to lower value to avoid shakiness (Default is 32)
-            self.follower_arms[name].write("P_Coefficient", 16)
-            # Set I_Coefficient and D_Coefficient to default value 0 and 32
-            self.follower_arms[name].write("I_Coefficient", 0)
-            self.follower_arms[name].write("D_Coefficient", 32)
-            # Close the write lock so that Maximum_Acceleration gets written to EPROM address,
-            # which is mandatory for Maximum_Acceleration to take effect after rebooting.
-            self.follower_arms[name].write("Lock", 0)
-            # Set Maximum_Acceleration to 254 to speedup acceleration and deceleration of
-            # the motors. Note: this configuration is not in the official STS3215 Memory Table
-            self.follower_arms[name].write("Maximum_Acceleration", 254)
-            self.follower_arms[name].write("Acceleration", 254)
+
+    def set_so100_robot_preset(self, arm):
+        """Set SO100 robot preset configurations for a specific arm."""
+        # Set Mode to Position Control (Mode=0)
+        arm.write("Mode", 0)
+
+        # Set PID Coefficients to reduce shakiness
+        arm.write("P_Coefficient", 16)
+        arm.write("I_Coefficient", 0)
+        arm.write("D_Coefficient", 32)
+
+        # Close the write lock to ensure maximum acceleration is written to EPROM
+        arm.write("Lock", 0)
+
+        # Set maximum acceleration to enhance motor responsiveness
+        arm.write("Maximum_Acceleration", 254)
+        arm.write("Acceleration", 254)
+
 
     def teleop_step(
         self, record_data=False

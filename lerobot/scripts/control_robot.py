@@ -136,14 +136,6 @@ from lerobot.common.utils.utils import init_hydra_config, init_logging, log_say,
 
 @safe_disconnect
 def calibrate(robot: Robot, arms: list[str] | None):
-    # TODO(aliberts): move this code in robots' classes
-    if robot.robot_type.startswith("stretch"):
-        if not robot.is_connected:
-            robot.connect()
-        if not robot.is_homed():
-            robot.home()
-        return
-
     if arms is None:
         arms = robot.available_arms
 
@@ -163,7 +155,18 @@ def calibrate(robot: Robot, arms: list[str] | None):
         )
 
     for arm_id in arms:
-        arm_calib_path = robot.calibration_dir / f"{arm_id}.json"
+
+        arm = robot.leader_arms.get(arm_id) or robot.follower_arms.get(arm_id)
+        if not arm:
+            continue
+
+        # Perform specific homing for 'stretch' type arms
+        if arm.robot_type.startswith("stretch"):
+            if not robot.is_homed():
+                robot.home()
+            return
+
+        arm_calib_path = arm.calibration_dir / f"{arm_id}.json"
         if arm_calib_path.exists():
             print(f"Removing '{arm_calib_path}'")
             arm_calib_path.unlink()

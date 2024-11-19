@@ -1,3 +1,5 @@
+python lerobot/scripts/control_robot.py calibrate --robot-path lerobot/configs/robot/koch_and_so100.yaml --robot-overrides "~cameras"  
+
 # Getting Started with Real-World Robots
 
 This tutorial will guide you through the process of setting up and training a neural network to autonomously control a real robot.

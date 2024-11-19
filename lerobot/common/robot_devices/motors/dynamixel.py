@@ -4,6 +4,7 @@ import math
 import time
 import traceback
 from copy import deepcopy
+from pathlib import Path
 
 import numpy as np
 import tqdm
@@ -298,10 +299,14 @@ class DynamixelMotorsBus:
         extra_model_control_table: dict[str, list[tuple]] | None = None,
         extra_model_resolution: dict[str, int] | None = None,
         mock=False,
+        robot_type=None,
+        calibration_dir=None
     ):
         self.port = port
         self.motors = motors
         self.mock = mock
+        self.robot_type = robot_type
+        self.calibration_dir = Path(calibration_dir)
 
         self.model_ctrl_table = deepcopy(MODEL_CONTROL_TABLE)
         if extra_model_control_table:

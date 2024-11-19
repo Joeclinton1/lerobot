@@ -10,6 +10,7 @@ import tqdm
 
 from lerobot.common.robot_devices.utils import RobotDeviceAlreadyConnectedError, RobotDeviceNotConnectedError
 from lerobot.common.utils.utils import capture_timestamp_utc
+from pathlib import Path
 
 PROTOCOL_VERSION = 0
 BAUDRATE = 1_000_000
@@ -276,10 +277,14 @@ class FeetechMotorsBus:
         extra_model_control_table: dict[str, list[tuple]] | None = None,
         extra_model_resolution: dict[str, int] | None = None,
         mock=False,
+        robot_type=None,
+        calibration_dir=None
     ):
         self.port = port
         self.motors = motors
         self.mock = mock
+        self.robot_type = robot_type
+        self.calibration_dir = Path(calibration_dir)
 
         self.model_ctrl_table = deepcopy(MODEL_CONTROL_TABLE)
         if extra_model_control_table:
@@ -557,12 +562,12 @@ class FeetechMotorsBus:
                     factor = math.ceil(low_factor)
 
                     if factor > upp_factor:
-                        raise ValueError(f"No integer found between bounds [{low_factor=}, {upp_factor=}]")
+                        raise ValueError(f"No integer found between bounds [{low_factor=}, {upp_factor=}], for motor: {name}")
                 else:
                     factor = math.ceil(upp_factor)
 
                     if factor > low_factor:
-                        raise ValueError(f"No integer found between bounds [{low_factor=}, {upp_factor=}]")
+                        raise ValueError(f"No integer found between bounds [{low_factor=}, {upp_factor=}], for motor: {name}")
 
                 if CalibrationMode[calib_mode] == CalibrationMode.DEGREE:
                     out_of_range_str = f"{LOWER_BOUND_DEGREE} < {calib_val} < {UPPER_BOUND_DEGREE} degrees"

@@ -43,7 +43,15 @@ def log_control_info(robot: Robot, dt_s, episode_index=None, frame_index=None, f
     log_dt("dt", dt_s)
 
     # TODO(aliberts): move robot-specific logs logic in robot.print_logs()
-    if not robot.robot_type.startswith("stretch"):
+    # Check if any arm is of type "stretch"
+    is_any_stretch_arm = any(
+        arm.robot_type.startswith("stretch") for arm in robot.leader_arms.values()
+    ) or any(
+        arm.robot_type.startswith("stretch") for arm in robot.follower_arms.values()
+    )
+
+    # Only log details if no arm is of type "stretch"
+    if not is_any_stretch_arm:
         for name in robot.leader_arms:
             key = f"read_leader_{name}_pos_dt_s"
             if key in robot.logs:
