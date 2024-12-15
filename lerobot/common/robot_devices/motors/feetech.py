@@ -833,6 +833,7 @@ class FeetechMotorsBus:
             values = self.revert_calibration(values, motor_names)
 
         values = values.tolist()
+        print(values)
 
         assert_same_address(self.model_ctrl_table, models, data_name)
         addr, bytes = self.model_ctrl_table[model][data_name]
