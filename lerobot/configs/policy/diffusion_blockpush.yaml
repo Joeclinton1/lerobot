@@ -40,9 +40,9 @@ policy:
   name: diffusion
 
   # Input / output structure.
-  n_obs_steps: 3
+  n_obs_steps: 2
   horizon: 12
-  n_action_steps: 1
+  n_action_steps: 8
 
   input_shapes:
     observation.environment_state: [12]
@@ -69,7 +69,7 @@ policy:
   down_dims: [256, 512, 1024]
   kernel_size: 5
   n_groups: 8
-  diffusion_step_embed_dim: 128
+  diffusion_step_embed_dim: 256
   use_film_scale_modulation: True
   # Noise scheduler.
   noise_scheduler_type: DDIM
