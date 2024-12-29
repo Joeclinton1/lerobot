@@ -172,7 +172,7 @@ class SACPolicy(
         min_q, _ = q_targets.min(dim=0)  # Get values from min operation
 
         # compute td target
-        td_target = rewards + self.config.discount * min_q #+ self.config.discount * self.temperature() * log_probs # add entropy term
+        td_target = rewards + self.config.discount * min_q #- self.config.discount * self.temperature() * log_probs # add entropy term
 
         # 3- compute predicted qs
         q_preds = self.critic_forward(observations, actions, use_target=False)
@@ -408,7 +408,8 @@ class Policy(nn.Module):
             log_std = torch.clamp(log_std, self.log_std_min, self.log_std_max)
         else:
             stds = self.fixed_std.expand_as(means)
-
+        
+        stds = torch.exp(log_std)
         # uses tahn activation function to squash the action to be in the range of [-1, 1]
         normal = torch.distributions.Normal(means, stds)
         x_t = normal.rsample()  # for reparameterization trick (mean + std * N(0,1)) 
