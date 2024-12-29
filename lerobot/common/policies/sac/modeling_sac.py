@@ -172,8 +172,9 @@ class SACPolicy(
         min_q, _ = q_targets.min(dim=0)  # Get values from min operation
 
         # compute td target
-        td_target = rewards + self.config.discount * min_q #- self.config.discount * self.temperature() * log_probs # add entropy term
-
+        td_target = rewards + self.config.discount * min_q # add entropy term
+        if self.config.backup_entropy:
+            td_target -= self.config.discount * self.temperature() * log_probs
         # 3- compute predicted qs
         q_preds = self.critic_forward(observations, actions, use_target=False)
 
