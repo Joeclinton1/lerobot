@@ -45,6 +45,7 @@ class SACConfig:
     critic_lr = 3e-4
     actor_lr = 3e-4
     temperature_lr = 3e-4
+    use_backup_entropy = True
     critic_target_update_weight = 0.005
     utd_ratio = 2
     state_encoder_hidden_dim = 256

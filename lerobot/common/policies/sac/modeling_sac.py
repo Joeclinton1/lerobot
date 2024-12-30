@@ -19,7 +19,6 @@
 
 from collections import deque
 from copy import deepcopy
-import math
 from typing import Callable, Optional, Sequence, Tuple
 
 import einops
@@ -132,21 +131,6 @@ class SACPolicy(
         return q_values
 
 
-    def critic_forward(self, observations: dict[str, Tensor], actions: Tensor, use_target: bool = False) -> Tensor:
-        """Forward pass through a critic network ensemble
-        
-        Args:
-            observations: Dictionary of observations
-            actions: Action tensor
-            use_target: If True, use target critics, otherwise use ensemble critics
-        
-        Returns:
-            Tensor of Q-values from all critics
-        """
-        critics = self.critic_target if use_target else self.critic_ensemble
-        q_values = torch.stack([critic(observations, actions) for critic in critics])
-        return q_values
-    
     def forward(self, batch: dict[str, Tensor]) -> dict[str, Tensor | float]:
         """Run the batch through the model and compute the loss.
         
@@ -186,8 +170,10 @@ class SACPolicy(
         min_q, _ = q_targets.min(dim=0)  # Get values from min operation
 
         # compute td target
-        td_target = rewards + self.config.discount * min_q #+ self.config.discount * self.temperature() * log_probs # add entropy term
-
+        td_target = rewards + self.config.discount * min_q 
+        if self.config.use_backup_entropy:
+            td_target -= self.config.discount * self.temperature() * log_probs
+        
         # 3- compute predicted qs
         q_preds = self.critic_forward(observations, actions, use_target=False)
 
