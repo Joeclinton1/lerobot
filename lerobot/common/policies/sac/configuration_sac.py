@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-# Copyright 2024 The HuggingFace Inc. team. 
+# Copyright 2024 The HuggingFace Inc. team.
 # All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -54,13 +54,13 @@ class SACConfig:
     critic_network_kwargs = {
         "hidden_dims": [256, 256],
         "activate_final": True,
-        }
+    }
     actor_network_kwargs = {
         "hidden_dims": [256, 256],
         "activate_final": True,
-        }
+    }
     policy_kwargs = {
         "use_tanh_squash": True,
         "log_std_min": -5,
         "log_std_max": 2,
-        }
+    }

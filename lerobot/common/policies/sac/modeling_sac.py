@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-# Copyright 2024 The HuggingFace Inc. team. 
+# Copyright 2024 The HuggingFace Inc. team.
 # All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -46,7 +46,6 @@ class SACPolicy(
     def __init__(
         self, config: SACConfig | None = None, dataset_stats: dict[str, dict[str, Tensor]] | None = None
     ):
-        
         super().__init__()
 
         if config is None:
@@ -65,7 +64,6 @@ class SACPolicy(
         self.unnormalize_outputs = Unnormalize(
             config.output_shapes, config.output_normalization_modes, dataset_stats
         )
-        # the original code uses separate encoders for critic and actor
         encoder_critic = SACObservationEncoder(config)
         encoder_actor = SACObservationEncoder(config)
         # Define networks
@@ -79,7 +77,7 @@ class SACPolicy(
                 )
             )
             critic_nets.append(critic_net)
-        
+
         self.critic_ensemble = create_critic_ensemble(critic_nets, config.num_critics)
         self.critic_target = deepcopy(self.critic_ensemble)
 
@@ -110,13 +108,29 @@ class SACPolicy(
             self._queues["observation.image"] = deque(maxlen=1)
         if "observation.environment_state" in self.config.input_shapes:
             self._queues["observation.environment_state"] = deque(maxlen=1)
-    
+
     @torch.no_grad()
     def select_action(self, batch: dict[str, Tensor]) -> Tensor:
         """Select action for inference/evaluation"""
         actions, _ = self.actor(batch)
         actions = self.unnormalize_outputs({"action": actions})["action"]
         return actions
+    
+    def critic_forward(self, observations: dict[str, Tensor], actions: Tensor, use_target: bool = False) -> Tensor:
+        """Forward pass through a critic network ensemble
+        
+        Args:
+            observations: Dictionary of observations
+            actions: Action tensor
+            use_target: If True, use target critics, otherwise use ensemble critics
+        
+        Returns:
+            Tensor of Q-values from all critics
+        """
+        critics = self.critic_target if use_target else self.critic_ensemble
+        q_values = torch.stack([critic(observations, actions) for critic in critics])
+        return q_values
+
 
     def critic_forward(self, observations: dict[str, Tensor], actions: Tensor, use_target: bool = False) -> Tensor:
         """Forward pass through a critic network ensemble
@@ -135,7 +149,7 @@ class SACPolicy(
     
     def forward(self, batch: dict[str, Tensor]) -> dict[str, Tensor | float]:
         """Run the batch through the model and compute the loss.
-
+        
         Returns a dictionary with loss as a tensor, and other information as native floats.
         """
         batch = self.normalize_inputs(batch)
@@ -172,9 +186,8 @@ class SACPolicy(
         min_q, _ = q_targets.min(dim=0)  # Get values from min operation
 
         # compute td target
-        td_target = rewards + self.config.discount * min_q # add entropy term
-        if self.config.backup_entropy:
-            td_target -= self.config.discount * self.temperature() * log_probs
+        td_target = rewards + self.config.discount * min_q #+ self.config.discount * self.temperature() * log_probs # add entropy term
+
         # 3- compute predicted qs
         q_preds = self.critic_forward(observations, actions, use_target=False)
 
@@ -233,7 +246,7 @@ class SACPolicy(
                 "entropy": entropy.item(),
                 "loss": loss,
             }
-    
+ 
     def update(self):
         # TODO: implement UTD update
         # First update only critics for utd_ratio-1 times
@@ -242,14 +255,13 @@ class SACPolicy(
         # Then update critic, critic target, actor and temperature
         """Update target networks with exponential moving average"""
         with torch.no_grad():
-            for target_critic, critic in zip(self.critic_target, self.critic_ensemble):
-                for target_param, param in zip(target_critic.parameters(), critic.parameters()):
+            for target_critic, critic in zip(self.critic_target, self.critic_ensemble, strict=False):
+                for target_param, param in zip(target_critic.parameters(), critic.parameters(), strict=False):
                     target_param.data.copy_(
                         target_param.data * self.config.critic_target_update_weight + 
                         param.data * (1.0 - self.config.critic_target_update_weight)
                     )
-
-
+ 
 class MLP(nn.Module):
     def __init__(
         self,
@@ -392,11 +404,8 @@ class Policy(nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
                 
         # Encode observations if encoder exists
-        if self.encoder is not None:
-            obs_enc = self.encoder(observations)
-        else:
-            obs_enc = observations
-            
+        obs_enc = observations if self.encoder is None else self.encoder(observations)
+
         # Get network outputs
         outputs = self.network(obs_enc)
         means = self.mean_layer(outputs)
@@ -408,11 +417,10 @@ class Policy(nn.Module):
                 log_std = torch.tanh(log_std)
             log_std = torch.clamp(log_std, self.log_std_min, self.log_std_max)
         else:
-            stds = self.fixed_std.expand_as(means)
-        
-        stds = torch.exp(log_std)
+            log_std = self.fixed_std.expand_as(means)
+    
         # uses tahn activation function to squash the action to be in the range of [-1, 1]
-        normal = torch.distributions.Normal(means, stds)
+        normal = torch.distributions.Normal(means, torch.exp(log_std))
         x_t = normal.rsample()  # for reparameterization trick (mean + std * N(0,1)) 
         log_probs = normal.log_prob(x_t)
         if self.use_tanh_squash:
@@ -581,4 +589,3 @@ def flatten_forward_unflatten(fn: Callable[[Tensor], Tensor], image_tensor: Tens
     inp = torch.flatten(image_tensor, end_dim=-4)
     flat_out = fn(inp)
     return torch.reshape(flat_out, (*start_dims, *flat_out.shape[1:]))
-
