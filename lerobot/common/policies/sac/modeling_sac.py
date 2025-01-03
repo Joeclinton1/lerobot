@@ -432,7 +432,7 @@ class Policy(nn.Module):
         # uses tahn activation function to squash the action to be in the range of [-1, 1]
         normal = torch.distributions.Normal(means, torch.exp(log_std))
         x_t = normal.rsample()  # for reparameterization trick (mean + std * N(0,1)) 
-        x_t = torch.clamp(x_t, -2.0, 2.0)
+        # x_t = torch.clamp(x_t, -2.0, 2.0)
         log_probs = normal.log_prob(x_t)
         if self.use_tanh_squash:
             actions = torch.tanh(x_t)
@@ -535,8 +535,8 @@ class LagrangeMultiplier(nn.Module):
     ):
         super().__init__()
         self.device = torch.device(device)
-        # init_value = torch.log(torch.exp(torch.tensor(init_value, device=self.device)) - 1)
-        init_value = torch.tensor(init_value, device=self.device)
+        init_value = torch.log(torch.exp(torch.tensor(init_value, device=self.device)) - 1)
+        # init_value = torch.tensor(init_value, device=self.device)
 
             
         # Initialize the Lagrange multiplier as a parameter
@@ -550,12 +550,12 @@ class LagrangeMultiplier(nn.Module):
         rhs: Optional[torch.Tensor | float | int] = None
     ) -> torch.Tensor:
         # Get the multiplier value based on parameterization        
-        # multiplier = torch.nn.functional.softplus(self.lagrange)
-        log_multiplier = torch.log(self.lagrange)
+        multiplier = torch.nn.functional.softplus(self.lagrange)
+        # log_multiplier = torch.log(self.lagrange)
 
         # Return the raw multiplier if no constraint values provided
         if lhs is None:
-            return log_multiplier.exp()
+            return multiplier
             
         # Convert inputs to tensors and move to device
         lhs = torch.tensor(lhs, device=self.device) if not isinstance(lhs, torch.Tensor) else lhs.to(self.device)
@@ -566,9 +566,9 @@ class LagrangeMultiplier(nn.Module):
             
         diff = lhs - rhs
         
-        assert diff.shape == log_multiplier.shape, f"Shape mismatch: {diff.shape} vs {log_multiplier.shape}"
+        assert diff.shape == multiplier.shape, f"Shape mismatch: {diff.shape} vs {multiplier.shape}"
         
-        return log_multiplier.exp() * diff # numerically better 
+        return multiplier * diff # numerically better 
 
 
 def orthogonal_init():
