@@ -433,9 +433,9 @@ class Policy(nn.Module):
 
         # uses tanh activation function to squash the action to be in the range of [-1, 1]
         normal = torch.distributions.Normal(means, torch.exp(log_std))
+
         x_t = normal.rsample()  # Reparameterization trick (mean + std * N(0,1))
         log_probs = normal.log_prob(x_t)  # Base log probability before Tanh
-
         if self.use_tanh_squash:
             actions = torch.tanh(x_t)
             log_probs -= torch.log((1 - actions.pow(2)) + 1e-6)  # Adjust log-probs for Tanh
@@ -541,6 +541,7 @@ class LagrangeMultiplier(nn.Module):
         lhs: Optional[Union[torch.Tensor, float, int]] = None,
         rhs: Optional[Union[torch.Tensor, float, int]] = None,
     ) -> torch.Tensor:
+
         # Compute alpha = exp(log_alpha)
         alpha = self.log_alpha.exp()
 
@@ -565,7 +566,6 @@ class LagrangeMultiplier(nn.Module):
 
         # Compute the difference and apply the multiplier
         diff = lhs - rhs
-
         assert diff.shape == alpha.shape, f"Shape mismatch: {diff.shape} vs {alpha.shape}"
 
         return alpha * diff
