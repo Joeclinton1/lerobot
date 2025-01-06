@@ -515,16 +515,16 @@ class SACObservationEncoder(nn.Module):
         for image_key in image_keys:
             feat.append(flatten_forward_unflatten(self.image_enc_layers, obs_dict[image_key]))
         if "observation.environment_state" in self.config.input_shapes:
-            feat.append(self.env_state_enc_layers(obs_dict["observation.environment_state"]))
+            feat.append(obs_dict["observation.environment_state"])
         if "observation.state" in self.config.input_shapes:
-            feat.append(self.state_enc_layers(obs_dict["observation.state"]))
+            feat.append(obs_dict["observation.state"])
         # TODO(ke-wang): currently average over all features, concatenate all features maybe a better way
-        return torch.stack(feat, dim=0).mean(0)
+        return torch.cat(feat, dim=-1)
 
     @property
     def output_dim(self) -> int:
         """Returns the dimension of the encoder output"""
-        return self.config.latent_dim
+        return sum(x[0] for x in self.config.input_shapes.values())
 
 
 class LagrangeMultiplier(nn.Module):
