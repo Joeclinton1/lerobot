@@ -103,7 +103,6 @@ class DiffusionConfig(PreTrainedConfig):
             to False as the original Diffusion Policy implementation does the same.
     """
 
-    # Inputs / output structure.
     n_obs_steps: int = 2
     horizon: int = 16
     n_action_steps: int = 8
@@ -116,11 +115,8 @@ class DiffusionConfig(PreTrainedConfig):
         }
     )
 
-    # The original implementation doesn't sample frames for the last 7 steps,
-    # which avoids excessive padding and leads to improved training results.
     drop_n_last_frames: int = 7  # horizon - n_action_steps - n_obs_steps + 1
 
-    # Architecture / modeling.
     # Vision backbone.
     vision_backbone: str = "resnet18"
     crop_shape: tuple[int, int] | None = (84, 84)
@@ -129,12 +125,14 @@ class DiffusionConfig(PreTrainedConfig):
     use_group_norm: bool = True
     spatial_softmax_num_keypoints: int = 32
     use_separate_rgb_encoder_per_camera: bool = False
+
     # Unet.
     down_dims: tuple[int, ...] = (512, 1024, 2048)
     kernel_size: int = 5
     n_groups: int = 8
     diffusion_step_embed_dim: int = 128
     use_film_scale_modulation: bool = True
+
     # Noise scheduler.
     noise_scheduler_type: str = "DDPM"
     num_train_timesteps: int = 100
@@ -144,6 +142,8 @@ class DiffusionConfig(PreTrainedConfig):
     prediction_type: str = "epsilon"
     clip_sample: bool = True
     clip_sample_range: float = 1.0
+    training_noise_sampling: str = "uniform"
+    use_flow_matching: bool = True
 
     # Inference
     num_inference_steps: int | None = None
@@ -162,7 +162,6 @@ class DiffusionConfig(PreTrainedConfig):
     def __post_init__(self):
         super().__post_init__()
 
-        """Input validation (not exhaustive)."""
         if not self.vision_backbone.startswith("resnet"):
             raise ValueError(
                 f"`vision_backbone` must be one of the ResNet variants. Got {self.vision_backbone}."
@@ -180,8 +179,6 @@ class DiffusionConfig(PreTrainedConfig):
                 f"Got {self.noise_scheduler_type}."
             )
 
-        # Check that the horizon size and U-Net downsampling is compatible.
-        # U-Net downsamples by 2 with each stage.
         downsampling_factor = 2 ** len(self.down_dims)
         if self.horizon % downsampling_factor != 0:
             raise ValueError(
@@ -212,11 +209,9 @@ class DiffusionConfig(PreTrainedConfig):
                 if self.crop_shape[0] > image_ft.shape[1] or self.crop_shape[1] > image_ft.shape[2]:
                     raise ValueError(
                         f"`crop_shape` should fit within the images shapes. Got {self.crop_shape} "
-                        f"for `crop_shape` and {image_ft.shape} for "
-                        f"`{key}`."
+                        f"for `crop_shape` and {image_ft.shape} for `{key}`."
                     )
 
-        # Check that all input images have the same shape.
         first_image_key, first_image_ft = next(iter(self.image_features.items()))
         for key, image_ft in self.image_features.items():
             if image_ft.shape != first_image_ft.shape:

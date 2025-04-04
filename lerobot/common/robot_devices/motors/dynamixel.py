@@ -333,7 +333,7 @@ class DynamixelMotorsBus:
             )
 
         if self.mock:
-            import tests.mock_dynamixel_sdk as dxl
+            import tests.motors.mock_dynamixel_sdk as dxl
         else:
             import dynamixel_sdk as dxl
 
@@ -357,7 +357,7 @@ class DynamixelMotorsBus:
 
     def reconnect(self):
         if self.mock:
-            import tests.mock_dynamixel_sdk as dxl
+            import tests.motors.mock_dynamixel_sdk as dxl
         else:
             import dynamixel_sdk as dxl
 
@@ -651,7 +651,7 @@ class DynamixelMotorsBus:
 
     def read_with_motor_ids(self, motor_models, motor_ids, data_name, num_retry=NUM_READ_RETRY):
         if self.mock:
-            import tests.mock_dynamixel_sdk as dxl
+            import tests.motors.mock_dynamixel_sdk as dxl
         else:
             import dynamixel_sdk as dxl
 
@@ -696,7 +696,7 @@ class DynamixelMotorsBus:
         start_time = time.perf_counter()
 
         if self.mock:
-            import tests.mock_dynamixel_sdk as dxl
+            import tests.motors.mock_dynamixel_sdk as dxl
         else:
             import dynamixel_sdk as dxl
 
@@ -762,7 +762,7 @@ class DynamixelMotorsBus:
 
     def write_with_motor_ids(self, motor_models, motor_ids, data_name, values, num_retry=NUM_WRITE_RETRY):
         if self.mock:
-            import tests.mock_dynamixel_sdk as dxl
+            import tests.motors.mock_dynamixel_sdk as dxl
         else:
             import dynamixel_sdk as dxl
 
@@ -798,7 +798,7 @@ class DynamixelMotorsBus:
         start_time = time.perf_counter()
 
         if self.mock:
-            import tests.mock_dynamixel_sdk as dxl
+            import tests.motors.mock_dynamixel_sdk as dxl
         else:
             import dynamixel_sdk as dxl
 
