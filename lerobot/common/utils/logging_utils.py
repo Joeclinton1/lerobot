@@ -13,7 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from typing import Any
+from typing import Any, Iterable, Optional
 
 from lerobot.common.utils.utils import format_big_number
 
@@ -157,7 +157,8 @@ class MetricsTracker:
             **{k: m.avg if use_avg else m.val for k, m in self.metrics.items()},
         }
 
-    def reset_averages(self) -> None:
+    def reset_averages(self, keys: Optional[Iterable[str]] = None) -> None:
         """Resets average meters."""
-        for m in self.metrics.values():
-            m.reset()
+        for k in keys or self.metrics:
+            if k in self.metrics:
+                self.metrics[k].reset()

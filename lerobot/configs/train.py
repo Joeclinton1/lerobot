@@ -15,7 +15,7 @@ import datetime as dt
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Type
+from typing import Type  # Added Optional
 
 import draccus
 from huggingface_hub import hf_hub_download
@@ -54,6 +54,8 @@ class TrainPipelineConfig(HubMixin):
     batch_size: int = 8
     steps: int = 100_000
     eval_freq: int = 20_000
+    # Added: Frequency to run validation (0 means disabled)
+    validation_freq: int = 400
     log_freq: int = 200
     save_checkpoint: bool = True
     # Checkpoint is saved every `save_freq` training iterations and after the last training step.

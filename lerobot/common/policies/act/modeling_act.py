@@ -144,10 +144,22 @@ class ACTPolicy(PreTrainedPolicy):
 
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict]:
         """Run the batch through the model and compute the loss for training or validation."""
+        # --- START DEBUG MODIFICATION ---
+        original_images_for_debug = None
+        if self.config.image_features:
+            # Store a clone of the original images JUST for debugging visualization later
+            original_images_for_debug = [batch[key].clone() for key in self.config.image_features]
+        # --- END DEBUG MODIFICATION ---
+
         batch = self.normalize_inputs(batch)
         if self.config.image_features:
             batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
             batch["observation.images"] = [batch[key] for key in self.config.image_features]
+            # --- START DEBUG MODIFICATION ---
+            # Add the original images to the batch under a temporary key
+            if original_images_for_debug is not None:
+                batch["_original_observation.images"] = original_images_for_debug
+            # --- END DEBUG MODIFICATION ---
 
         batch = self.normalize_targets(batch)
         actions_hat, (mu_hat, log_sigma_x2_hat) = self.model(batch)
@@ -169,6 +181,12 @@ class ACTPolicy(PreTrainedPolicy):
             loss = l1_loss + mean_kld * self.config.kl_weight
         else:
             loss = l1_loss
+
+        # --- START DEBUG MODIFICATION ---
+        # Clean up the temporary key if it exists
+        if "_original_observation.images" in batch:
+            del batch["_original_observation.images"]
+        # --- END DEBUG MODIFICATION ---
 
         return loss, loss_dict
 
@@ -342,6 +360,16 @@ class ACT(nn.Module):
             # Note: The forward method of this returns a dict: {"feature_map": output}.
             self.backbone = IntermediateLayerGetter(backbone_model, return_layers={"layer4": "feature_map"})
 
+        # *** New: Initialize the depth estimation model and processor if enabled ***
+        if getattr(self.config, "use_depth_transform", False):
+            from transformers import AutoImageProcessor, AutoModelForDepthEstimation
+
+            model_name = "xingyang1/Distill-Any-Depth-Small-hf"
+            self.depth_processor = AutoImageProcessor.from_pretrained(model_name)
+            self.depth_model = (
+                AutoModelForDepthEstimation.from_pretrained(model_name).to(self.config.device).eval().half()
+            )
+
         # Transformer (acts as VAE decoder when training with the variational objective).
         self.encoder = ACTEncoder(config)
         self.decoder = ACTDecoder(config)
@@ -483,10 +511,42 @@ class ACT(nn.Module):
 
         # Camera observation features and positional embeddings.
         if self.config.image_features:
+            if getattr(self.config, "use_depth_transform", False):
+                processed_images = []
+                for img in batch["observation.images"]:
+                    # Resize image for depth model
+                    resized = F.interpolate(
+                        img.float(), size=(518, 518), mode="bilinear", align_corners=False
+                    ).half()
+
+                    with torch.no_grad():
+                        depth = self.depth_model(pixel_values=resized).predicted_depth
+
+                    # Resize depth to match resized image
+                    depth_resized = F.interpolate(
+                        depth.unsqueeze(1), size=resized.shape[-2:], mode="bilinear", align_corners=False
+                    ).squeeze(1)
+
+                    # Brightness scaling using depth
+                    resized_float = resized.float() / 255.0
+                    depth_rgb = depth_resized.unsqueeze(1).expand_as(resized_float)
+                    brightened = torch.clamp(resized_float * depth_rgb, 0, 1)
+                    brightened = (brightened * 255).to(torch.uint8)
+
+                    # Resize back to original image size
+                    final_img = (
+                        F.interpolate(
+                            brightened.float(), size=img.shape[-2:], mode="bilinear", align_corners=False
+                        )
+                        / 255.0
+                    )
+                    processed_images.append(final_img)
+
+                batch["observation.images"] = processed_images
+
             all_cam_features = []
             all_cam_pos_embeds = []
 
-            # For a list of images, the H and W may vary but H*W is constant.
             for img in batch["observation.images"]:
                 cam_features = self.backbone(img)["feature_map"]
                 cam_pos_embed = self.encoder_cam_feat_pos_embed(cam_features).to(dtype=cam_features.dtype)
