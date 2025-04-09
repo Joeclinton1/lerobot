@@ -124,6 +124,9 @@ class ACTConfig(PreTrainedConfig):
     latent_dim: int = 32
     n_vae_encoder_layers: int = 4
 
+    # *** New: Depth map preprocessing transformation config ***
+    use_depth_transform: bool = False
+
     # Inference.
     # Note: the value used in ACT when temporal ensembling is enabled is 0.01.
     temporal_ensemble_coeff: float | None = None
