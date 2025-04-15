@@ -315,7 +315,7 @@ class LeRobotDatasetMetadata:
         obj.repo_id = repo_id
         obj.root = Path(root) if root is not None else HF_LEROBOT_HOME / repo_id
 
-        obj.root.mkdir(parents=True, exist_ok=False)
+        obj.root.mkdir(parents=True, exist_ok=True)
 
         if robot is not None:
             features = get_features_from_robot(robot, use_videos)
@@ -617,10 +617,10 @@ class LeRobotDataset(torch.utils.data.Dataset):
         """hf_dataset contains all the observations, states, actions, rewards, etc."""
         if self.episodes is None:
             path = str(self.root / "data")
-            hf_dataset = load_dataset("parquet", data_dir=path, split="train")
+            hf_dataset = load_dataset("parquet", data_dir=path, split="train", streaming=False)
         else:
             files = [str(self.root / self.meta.get_data_file_path(ep_idx)) for ep_idx in self.episodes]
-            hf_dataset = load_dataset("parquet", data_files=files, split="train")
+            hf_dataset = load_dataset("parquet", data_files=files, split="train", streaming=False)
 
         # TODO(aliberts): hf_dataset.set_format("torch")
         hf_dataset.set_transform(hf_transform_to_torch)
@@ -907,6 +907,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         )
 
         video_files = list(self.root.rglob("*.mp4"))
+        print(len(video_files), self.num_episodes, len(self.meta.video_keys))
         assert len(video_files) == self.num_episodes * len(self.meta.video_keys)
 
         parquet_files = list(self.root.rglob("*.parquet"))
