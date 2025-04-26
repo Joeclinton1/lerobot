@@ -388,14 +388,24 @@ def get_hf_features_from_features(features: dict) -> datasets.Features:
 
 
 def get_features_from_robot(robot: Robot, use_videos: bool = True) -> dict:
-    camera_ft = {}
-    if robot.cameras:
-        camera_ft = {
-            key: {"dtype": "video" if use_videos else "image", **ft}
-            for key, ft in robot.camera_features.items()
-        }
-    return {**robot.motor_features, **camera_ft, **DEFAULT_FEATURES}
+    # 1) base motor + camera + default features
+    camera_ft = {
+        key: {"dtype": "video" if use_videos else "image", **ft}
+        for key, ft in getattr(robot, "camera_features", {}).items()
+    }
+    features = {
+        **robot.motor_features,
+        **camera_ft,
+        **DEFAULT_FEATURES,
+    }
 
+    # 2) if robot can supply EE‐space, let that override
+    if hasattr(robot, "get_ee_space_features"):
+        ee_feats = robot.get_ee_space_features()
+        # this will replace 'action' and 'observation.state' (and any others)
+        features.update(ee_feats)
+
+    return features
 
 def dataset_to_policy_features(features: dict[str, dict]) -> dict[str, PolicyFeature]:
     # TODO(aliberts): Implement "type" in dataset features and simplify this

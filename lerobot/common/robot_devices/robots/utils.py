@@ -72,8 +72,12 @@ def make_robot_config(robot_type: str, **kwargs) -> RobotConfig:
 def make_robot_from_config(config: RobotConfig):
     if isinstance(config, ManipulatorRobotConfig):
         from lerobot.common.robot_devices.robots.manipulator import ManipulatorRobot
+        robot =  ManipulatorRobot(config)
+        if getattr(config, "use_ee_space", False):
+            from lerobot.common.robot_devices.robots.ee_manipulator import EEManipulatorDecorator
+            return EEManipulatorDecorator(robot)
+        return robot
 
-        return ManipulatorRobot(config)
     elif isinstance(config, LeKiwiRobotConfig):
         from lerobot.common.robot_devices.robots.mobile_manipulator import MobileManipulator
 

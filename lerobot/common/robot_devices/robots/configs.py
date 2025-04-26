@@ -57,6 +57,9 @@ class ManipulatorRobotConfig(RobotConfig):
 
     mock: bool = False
 
+    # config parameter to enable end effector space on actions and proprioceptive observations
+    use_ee_space: bool = False
+
     def __post_init__(self):
         if self.mock:
             for arm in self.leader_arms.values():
