@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from dataclasses import dataclass, field
+from typing import List
 
 from lerobot.common.optim.optimizers import AdamWConfig
 from lerobot.configs.policies import PreTrainedConfig
@@ -105,13 +106,17 @@ class ACTConfig(PreTrainedConfig):
 
     # Architecture.
     # Vision backbone.
-    vision_backbone: str = "resnet18"
-    pretrained_backbone_weights: str | None = "ResNet18_Weights.IMAGENET1K_V1"
-    freeze_backbone: bool = False
+    # vision_backbone: str = "resnet18"
+    # pretrained_backbone_weights: str | None = "ResNet18_Weights.IMAGENET1K_V1"
+    vision_backbone: str = "ProtoSAM"
+    pretrained_backbone_weights: str | None = "weights/FastSAM-x.pt"
+    proto_indices: List[int] = field(default_factory=lambda: [2, 5, 16, 21, 22, 31])
+    freeze_backbone: bool = True
     replace_final_stride_with_dilation: int = False
+
     # Transformer layers.
     pre_norm: bool = False
-    dim_model: int = 512
+    dim_model: int = 512 # replaced with len(proto_indices) if using ProtoSAM
     n_heads: int = 8
     dim_feedforward: int = 3200
     feedforward_activation: str = "relu"

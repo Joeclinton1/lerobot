@@ -37,6 +37,7 @@ from lerobot.common.policies.act.configuration_act import ACTConfig
 from lerobot.common.policies.normalize import Normalize, Unnormalize
 from lerobot.common.policies.pretrained import PreTrainedPolicy
 
+from proto_sam.fast_sam_proto_module import FastSAMProto
 
 class ACTPolicy(PreTrainedPolicy):
     """
@@ -332,11 +333,20 @@ class ACT(nn.Module):
 
         # Backbone for image feature extraction.
         if self.config.image_features:
-            backbone_model = getattr(torchvision.models, config.vision_backbone)(
-                replace_stride_with_dilation=[False, False, config.replace_final_stride_with_dilation],
-                weights=config.pretrained_backbone_weights,
-                norm_layer=FrozenBatchNorm2d,
-            )
+            if config.vision_backbone == "ProtoSAM":
+                backbone_model = FastSAMProto(
+                    imgsz=384,
+                    weights=config.pretrained_backbone_weights,
+                    device=config.device,
+                    proto_indices=config.proto_indices
+                )
+                config.dim_model = len(backbone_model.proto_indices)
+            else:
+                backbone_model = getattr(torchvision.models, config.vision_backbone)(
+                    replace_stride_with_dilation=[False, False, config.replace_final_stride_with_dilation],
+                    weights=config.pretrained_backbone_weights,
+                    norm_layer=FrozenBatchNorm2d,
+                )
 
             # Conditionally freeze the backbone
             if self.config.freeze_backbone:
