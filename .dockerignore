@@ -21,7 +21,11 @@ outputs
 .vscode
 rl
 media
+profiler_logs
 
+# Ignore local Python environments
+.venv
+venv
 
 # Logging
 logs

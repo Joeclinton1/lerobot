@@ -144,22 +144,10 @@ class ACTPolicy(PreTrainedPolicy):
 
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict]:
         """Run the batch through the model and compute the loss for training or validation."""
-        # --- START DEBUG MODIFICATION ---
-        original_images_for_debug = None
-        if self.config.image_features:
-            # Store a clone of the original images JUST for debugging visualization later
-            original_images_for_debug = [batch[key].clone() for key in self.config.image_features]
-        # --- END DEBUG MODIFICATION ---
-
         batch = self.normalize_inputs(batch)
         if self.config.image_features:
             batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
             batch["observation.images"] = [batch[key] for key in self.config.image_features]
-            # --- START DEBUG MODIFICATION ---
-            # Add the original images to the batch under a temporary key
-            if original_images_for_debug is not None:
-                batch["_original_observation.images"] = original_images_for_debug
-            # --- END DEBUG MODIFICATION ---
 
         batch = self.normalize_targets(batch)
         actions_hat, (mu_hat, log_sigma_x2_hat) = self.model(batch)
@@ -168,7 +156,7 @@ class ACTPolicy(PreTrainedPolicy):
             F.l1_loss(batch["action"], actions_hat, reduction="none") * ~batch["action_is_pad"].unsqueeze(-1)
         ).mean()
 
-        loss_dict = {"l1_loss": l1_loss.item()}
+        loss_dict = {"l1_loss": l1_loss}
         if self.config.use_vae:
             # Calculate Dₖₗ(latent_pdf || standard_normal). Note: After computing the KL-divergence for
             # each dimension independently, we sum over the latent dimension to get the total
@@ -177,16 +165,10 @@ class ACTPolicy(PreTrainedPolicy):
             mean_kld = (
                 (-0.5 * (1 + log_sigma_x2_hat - mu_hat.pow(2) - (log_sigma_x2_hat).exp())).sum(-1).mean()
             )
-            loss_dict["kld_loss"] = mean_kld.item()
+            loss_dict["kld_loss"] = mean_kld
             loss = l1_loss + mean_kld * self.config.kl_weight
         else:
             loss = l1_loss
-
-        # --- START DEBUG MODIFICATION ---
-        # Clean up the temporary key if it exists
-        if "_original_observation.images" in batch:
-            del batch["_original_observation.images"]
-        # --- END DEBUG MODIFICATION ---
 
         return loss, loss_dict
 
@@ -355,6 +337,12 @@ class ACT(nn.Module):
                 weights=config.pretrained_backbone_weights,
                 norm_layer=FrozenBatchNorm2d,
             )
+
+            # Conditionally freeze the backbone
+            if self.config.freeze_backbone:
+                for param in backbone_model.parameters():
+                    param.requires_grad = False
+
             # Note: The assumption here is that we are using a ResNet model (and hence layer4 is the final
             # feature map).
             # Note: The forward method of this returns a dict: {"feature_map": output}.
@@ -548,7 +536,12 @@ class ACT(nn.Module):
             all_cam_pos_embeds = []
 
             for img in batch["observation.images"]:
-                cam_features = self.backbone(img)["feature_map"]
+                if self.config.freeze_backbone:
+                    with torch.no_grad():
+                        cam_features = self.backbone(img)["feature_map"]
+                else:
+                    cam_features = self.backbone(img)["feature_map"]
+
                 cam_pos_embed = self.encoder_cam_feat_pos_embed(cam_features).to(dtype=cam_features.dtype)
                 cam_features = self.encoder_img_feat_input_proj(cam_features)
 

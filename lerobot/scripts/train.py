@@ -20,6 +20,7 @@ from pprint import pformat
 from typing import Any  # Added Optional
 
 import torch
+import torch.profiler
 from termcolor import colored
 from torch.amp import GradScaler
 from torch.optim import Optimizer
@@ -100,22 +101,26 @@ def update_policy(
         # To possibly update an internal buffer (for instance an Exponential Moving Average like in TDMPC).
         policy.update()
 
-    train_metrics.loss = loss.item()
-    # Handle potential non-finite grad_norm gracefully for logging
-    train_metrics.grad_norm = grad_norm.item() if torch.isfinite(grad_norm) else float("inf")
+    # pack both scalars into one tiny tensor
+    stats_gpu = torch.stack([loss.detach(), grad_norm.detach()])
+
+    # 1 sync to host
+    stats_cpu = stats_gpu.to("cpu", non_blocking=True)
+    loss_val, grad_norm_val = stats_cpu.tolist()
+
+    train_metrics.loss = loss_val
+    train_metrics.grad_norm = grad_norm_val
     train_metrics.lr = optimizer.param_groups[0]["lr"]
     train_metrics.update_s = time.perf_counter() - start_time
 
-    # Detach output_dict tensors for logging
+    # convert outputs as before, or defer them too
     loggable_output_dict = {}
-    if output_dict:
-        for k, v in output_dict.items():
-            if isinstance(v, torch.Tensor):
-                loggable_output_dict[k] = (
-                    v.detach().cpu().item() if v.numel() == 1 else v.detach().cpu().numpy()
-                )
-            else:
-                loggable_output_dict[k] = v
+    for k, v in (output_dict or {}).items():
+        if isinstance(v, torch.Tensor):
+            cpu_v = v.detach().cpu()  # single sync per output tensor
+            loggable_output_dict[k] = cpu_v.item() if cpu_v.numel() == 1 else cpu_v.numpy()
+        else:
+            loggable_output_dict[k] = v
 
     return train_metrics, loggable_output_dict
 
@@ -164,16 +169,7 @@ def train(cfg: TrainPipelineConfig):
     step = 0  # number of policy updates (forward + backward + optim)
 
     if cfg.resume:
-        # Pass device if load_training_state requires it for correct optimizer state loading
-        try:
-            step, optimizer, lr_scheduler = load_training_state(
-                cfg.checkpoint_path, optimizer, lr_scheduler, device=device
-            )  # Assuming device is needed
-            logging.info(f"Resumed training from step {step}")
-        except FileNotFoundError:
-            logging.warning(f"Resume checkpoint not found at {cfg.checkpoint_path}. Starting from scratch.")
-        except Exception as e:
-            logging.error(f"Failed to load checkpoint: {e}. Starting from scratch.", exc_info=True)
+        step, optimizer, lr_scheduler = load_training_state(cfg.checkpoint_path, optimizer, lr_scheduler)
 
     num_learnable_params = sum(p.numel() for p in policy.parameters() if p.requires_grad)
     num_total_params = sum(p.numel() for p in policy.parameters())
@@ -227,7 +223,8 @@ def train(cfg: TrainPipelineConfig):
         "lr": AverageMeter("lr", ":0.1e"),
         "update_s": AverageMeter("updt_s", ":.3f"),
         "dataloading_s": AverageMeter("data_s", ":.3f"),
-        "val_loss": AverageMeter("val_loss", ":.4f"),  # Added val_loss metric
+        "val_loss": AverageMeter("val_loss", ":.4f"),
+        "val_s": AverageMeter("val_s", ":.4f"),  # val_s metric for amortized cost of validation per step
     }
 
     train_tracker = MetricsTracker(
@@ -270,11 +267,16 @@ def train(cfg: TrainPipelineConfig):
 
         # Integrate validation loop directly here
         if is_validation_step:
+            validation_start_time = time.perf_counter()
+
             policy.eval()
             total_val_loss = 0.0
-            num_val_batches = 0
+            fraction = 0.05  # only sample 8% of val dataset. Hardcoded for simplicity.
+            num_batches_to_run = int(fraction * len(val_dataloader))
             with torch.no_grad():
-                for val_batch in val_dataloader:
+                for batch_idx, val_batch in enumerate(val_dataloader):
+                    if batch_idx >= num_batches_to_run:
+                        break
                     for key in val_batch:
                         if isinstance(val_batch[key], torch.Tensor):
                             val_batch[key] = val_batch[key].to(device, non_blocking=True)
@@ -282,11 +284,17 @@ def train(cfg: TrainPipelineConfig):
                         loss, _ = policy.forward(val_batch)
                     if torch.isfinite(loss):
                         total_val_loss += loss.item()
-                        num_val_batches += 1
+
             policy.train()
-            avg_val_loss = total_val_loss / num_val_batches if num_val_batches > 0 else 0.0
+            avg_val_loss = total_val_loss / num_batches_to_run
             train_tracker.metrics["val_loss"].reset()
             train_tracker.metrics["val_loss"].update(avg_val_loss)
+
+            validation_duration = time.perf_counter() - validation_start_time
+            amortized_val_time = validation_duration / cfg.validation_freq
+
+            train_tracker.metrics["val_s"].reset()
+            train_tracker.metrics["val_s"].update(amortized_val_time)
 
         if is_log_step:
             log_message = str(train_tracker)  # Get base log string
@@ -340,8 +348,6 @@ def train(cfg: TrainPipelineConfig):
     if eval_env:
         eval_env.close()
     logging.info("End of training")
-    if wandb_logger:
-        wandb_logger.finish()  # Ensure wandb run finishes
 
 
 if __name__ == "__main__":
