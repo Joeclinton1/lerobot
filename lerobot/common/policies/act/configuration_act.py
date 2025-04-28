@@ -98,7 +98,8 @@ class ACTConfig(PreTrainedConfig):
 
     normalization_mapping: dict[str, NormalizationMode] = field(
         default_factory=lambda: {
-            "VISUAL": NormalizationMode.MEAN_STD,
+            # "VISUAL": NormalizationMode.MEAN_STD,
+            "VISUAL": NormalizationMode.IDENTITY,  # SAM does not use imagenet normalisation
             "STATE": NormalizationMode.MEAN_STD,
             "ACTION": NormalizationMode.MEAN_STD,
         }
@@ -109,14 +110,16 @@ class ACTConfig(PreTrainedConfig):
     # vision_backbone: str = "resnet18"
     # pretrained_backbone_weights: str | None = "ResNet18_Weights.IMAGENET1K_V1"
     vision_backbone: str = "ProtoSAM"
-    pretrained_backbone_weights: str | None = "weights/FastSAM-x.pt"
-    proto_indices: List[int] = field(default_factory=lambda: [2, 5, 16, 21, 22, 31])
+    pretrained_backbone_weights: str | None = "weights/FastSAM-s.pt"
+    # proto_indices: List[int] = field(default_factory=lambda: [2, 5, 16, 21, 22, 31]) # x
+    proto_indices: List[int] = field(default_factory=lambda: [3, 5, 6, 8, 19, 31, 21])  # s
+    # proto_indices: List[int] | None = None
     freeze_backbone: bool = True
     replace_final_stride_with_dilation: int = False
 
     # Transformer layers.
     pre_norm: bool = False
-    dim_model: int = 512 # replaced with len(proto_indices) if using ProtoSAM
+    dim_model: int = 512  # replaced with len(proto_indices) if using ProtoSAM
     n_heads: int = 8
     dim_feedforward: int = 3200
     feedforward_activation: str = "relu"
@@ -150,9 +153,9 @@ class ACTConfig(PreTrainedConfig):
         super().__post_init__()
 
         """Input validation (not exhaustive)."""
-        if not self.vision_backbone.startswith("resnet"):
+        if not (self.vision_backbone.startswith("resnet") or self.vision_backbone == "ProtoSAM"):
             raise ValueError(
-                f"`vision_backbone` must be one of the ResNet variants. Got {self.vision_backbone}."
+                f"`vision_backbone` must be one of the ResNet variants or 'ProtoSAM'. Got {self.vision_backbone}."
             )
         if self.temporal_ensemble_coeff is not None and self.n_action_steps > 1:
             raise NotImplementedError(
