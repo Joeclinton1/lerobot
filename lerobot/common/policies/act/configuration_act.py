@@ -111,8 +111,8 @@ class ACTConfig(PreTrainedConfig):
     # pretrained_backbone_weights: str | None = "ResNet18_Weights.IMAGENET1K_V1"
     vision_backbone: str = "ProtoSAM"
     pretrained_backbone_weights: str | None = "weights/FastSAM-s.pt"
-    # proto_indices: List[int] = field(default_factory=lambda: [2, 5, 16, 21, 22, 31]) # x
-    proto_indices: List[int] = field(default_factory=lambda: [3, 5, 6, 8, 19, 31, 21])  # s
+    # proto_indices: List[int] | None = field(default_factory=lambda: [2, 5, 16, 21, 22, 31]) # x
+    proto_indices: List[int] | None  = field(default_factory=lambda: [3, 5, 6, 8, 19, 31, 21])  # s
     # proto_indices: List[int] | None = None
     freeze_backbone: bool = True
     replace_final_stride_with_dilation: int = False

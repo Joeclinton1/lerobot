@@ -361,33 +361,6 @@ class ACT(nn.Module):
                 create_sinusoidal_pos_embedding(num_input_token_encoder, config.dim_model).unsqueeze(0),
             )
 
-        # Backbone for image feature extraction.
-        if self.config.image_features:
-            if config.vision_backbone == "ProtoSAM":
-                backbone_model = FastSAMProto(
-                    imgsz=384,
-                    weights=config.pretrained_backbone_weights,
-                    device=config.device,
-                    proto_indices=config.proto_indices
-                )
-                config.dim_model = len(backbone_model.proto_indices)
-            else:
-                backbone_model = getattr(torchvision.models, config.vision_backbone)(
-                    replace_stride_with_dilation=[False, False, config.replace_final_stride_with_dilation],
-                    weights=config.pretrained_backbone_weights,
-                    norm_layer=FrozenBatchNorm2d,
-                )
-
-            # Conditionally freeze the backbone
-            if self.config.freeze_backbone:
-                for param in backbone_model.parameters():
-                    param.requires_grad = False
-
-            # Note: The assumption here is that we are using a ResNet model (and hence layer4 is the final
-            # feature map).
-            # Note: The forward method of this returns a dict: {"feature_map": output}.
-            self.backbone = IntermediateLayerGetter(backbone_model, return_layers={"layer4": "feature_map"})
-
         # *** New: Initialize the depth estimation model and processor if enabled ***
         if getattr(self.config, "use_depth_transform", False):
             from transformers import AutoImageProcessor, AutoModelForDepthEstimation
