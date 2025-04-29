@@ -310,7 +310,7 @@ class ACT(nn.Module):
         if self.config.image_features:
             if config.vision_backbone == "ProtoSAM":
                 backbone_model = FastSAMProto(
-                    imgsz=384,
+                    imgsz=512,
                     weights=config.pretrained_backbone_weights,
                     device=config.device,
                     proto_indices=config.proto_indices,
