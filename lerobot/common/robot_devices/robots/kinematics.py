@@ -415,7 +415,7 @@ class RobotKinematics:
             fk_func = self.fk_gripper
 
         # Do gradient descent.
-        max_iterations = 1
+        max_iterations = 2
         learning_rate = 1
         for _ in range(max_iterations):
             current_ee_pose = fk_func(current_joint_state)

@@ -23,15 +23,22 @@ import logging
 import time
 import warnings
 from pathlib import Path
-
+import cv2
 import numpy as np
 import torch
-
+from math import radians as rad
 from lerobot.common.robot_devices.cameras.utils import make_cameras_from_configs
 from lerobot.common.robot_devices.motors.utils import MotorsBus, make_motors_buses_from_configs
 from lerobot.common.robot_devices.robots.configs import ManipulatorRobotConfig
 from lerobot.common.robot_devices.robots.utils import get_arm_id
 from lerobot.common.robot_devices.utils import RobotDeviceAlreadyConnectedError, RobotDeviceNotConnectedError
+
+from lerobot.common.robot_devices.robots.kinematics import RobotKinematics
+from lerobot.common.robot_devices.robots.ee_manipulator import vec_to_pose, SAFE_RANGE, pose_to_vec
+from lerobot.common.robot_devices.hand_tracking import HandPoseTracker
+from wilor_mini.pipelines.wilor_hand_pose3d_estimation_pipeline import (
+    WiLorHandPose3dEstimationPipeline,
+)
 
 
 def ensure_safe_goal_position(
@@ -150,7 +157,7 @@ class ManipulatorRobot:
 
     Example of disconnecting which is not mandatory since we disconnect when the object is deleted:
     ```python
-    robot.disconnect()
+    robot.disconnect() 
     ```
     """
 
@@ -166,7 +173,13 @@ class ManipulatorRobot:
         self.cameras = make_cameras_from_configs(self.config.cameras)
         self.is_connected = False
         self.logs = {}
-
+        if self.config.hand_track_enable:
+            self.kinematics = RobotKinematics(self.robot_type)
+            self.hand_tracker = HandPoseTracker(
+                cam_idx=self.config.hand_track_cam,
+                show_viz=self.config.hand_track_viz,
+                hand=self.config.hand_track_hand
+            )
     def get_motor_names(self, arm: dict[str, MotorsBus]) -> list:
         return [f"{arm}_{motor}" for arm, bus in arm.items() for motor in bus.motors]
 
@@ -452,6 +465,64 @@ class ManipulatorRobot:
         # Apply SO100 preset to follower arms by reusing the existing method
         self.set_so100_robot_preset()
 
+    def read_leader(self) -> dict:
+        if self.config.hand_track_enable:
+            cur = self.follower_arms["main"].read("Present_Position")
+            follower_ee = self.joint_to_ee(cur)
+            hand_ee = self.hand_tracker.read_hand_state(follower_vec7=follower_ee)
+            return {"main": torch.from_numpy(self.ee_to_joint(hand_ee, cur))}
+        else:
+            leader_pos = {}
+            for name in self.leader_arms:
+                before_lread_t = time.perf_counter()
+                leader_pos[name] = self.leader_arms[name].read("Present_Position")
+                leader_pos[name] = torch.from_numpy(leader_pos[name])
+                self.logs[f"read_leader_{name}_pos_dt_s"] = time.perf_counter() - before_lread_t
+            return leader_pos
+
+    def ee_to_joint(self, ee_vec:np.ndarray, cur:np.ndarray) -> np.ndarray:
+        # Make sure the ee_vec is clipped to safe values
+        clipped = [np.clip(val, *SAFE_RANGE[key]) for val, key in zip(ee_vec, "xyzuvwg")]
+
+        ee_pose, g = vec_to_pose(np.array(clipped))
+        cmd = self.kinematics.ik(cur, ee_pose, position_only=True)
+        return np.concatenate([cmd[:-1], [g]]).astype(np.float32)
+    
+    def joint_to_ee(self, joint_vec: np.ndarray) -> np.ndarray:
+        ee_pose = self.kinematics.fk_gripper(joint_vec)
+        return pose_to_vec(ee_pose, joint_vec[-1].item())
+
+    def read_ee_sequence_test(self) -> dict:
+        # Use this function to test the working area
+        import time, math
+
+        coverage = 0.4 # percent of working area to cover in motion
+        period = 4 # seconds per forward-backwards cycle
+
+        def lerp(lo, hi, f): return lo + f * (hi - lo)
+        def axis_motion(axis, t_rel):
+            f = 0.5 + coverage / 2 * math.sin(2 * math.pi * t_rel / period)
+            pos = {
+                "x": lerp(*SAFE_RANGE["x"], 0.5),
+                "y": lerp(*SAFE_RANGE["y"], 0.5),
+                "z": lerp(*SAFE_RANGE["z"], 0.5)
+            }
+            pos[axis] = lerp(*SAFE_RANGE[axis], f)
+            return np.array([pos["x"], pos["y"], pos["z"], rad(-90), rad(45), rad(0), 10], dtype=np.float32)
+
+        t = time.time() % 14  # 2s center + 3 axes × 4s
+        if t < 2:
+            ee = axis_motion("x", 0)  # center hold
+        elif t < 6:
+            ee = axis_motion("x", t - 2)
+        elif t < 10:
+            ee = axis_motion("y", t - 6)
+        else:
+            ee = axis_motion("z", t - 10)
+
+        cur = self.follower_arms["main"].read("Present_Position")
+        return {"main": torch.from_numpy(self.ee_to_joint(ee, cur))}
+        
     def teleop_step(
         self, record_data=False
     ) -> None | tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
@@ -461,12 +532,8 @@ class ManipulatorRobot:
             )
 
         # Prepare to assign the position of the leader to the follower
-        leader_pos = {}
-        for name in self.leader_arms:
-            before_lread_t = time.perf_counter()
-            leader_pos[name] = self.leader_arms[name].read("Present_Position")
-            leader_pos[name] = torch.from_numpy(leader_pos[name])
-            self.logs[f"read_leader_{name}_pos_dt_s"] = time.perf_counter() - before_lread_t
+        leader_pos = self.read_leader()
+        # leader_pos = self.read_ee_sequence_test()
 
         # Send goal position to the follower
         follower_goal_pos = {}

@@ -26,11 +26,23 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 from lerobot.common.robot_devices.robots.kinematics import RobotKinematics
-
+from math import radians as rad
 # -----------------------------------------------------------------------------
 # Global switch for console logging + live visualisation
 # -----------------------------------------------------------------------------
 DEBUG = False
+
+# The range is purposefully tight to avoid potentially damaging the arm
+# Increase the range at your own risk
+SAFE_RANGE = {
+    "x": (0.13, 0.36),
+    "y": (-0.23, 0.23),
+    "z": (0.008, 0.25),
+    "u": (rad(45), rad(225)),
+    "v": (rad(-70), rad(90)),
+    "w": (rad(-70), rad(70)),
+    "g": (0,80)
+}
 
 # -----------------------------------------------------------------------------
 # EE‑space ⇄ SE(3) helpers
@@ -81,10 +93,16 @@ class EEManipulatorDecorator:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-    def _to_ee(self, joint_state: torch.Tensor) -> np.ndarray:
+    def _joint_to_ee(self, joint_state: torch.Tensor) -> np.ndarray:
         ee_pose = self.kinematics.fk_gripper(joint_state.numpy())
         return pose_to_vec(ee_pose, joint_state[-1].item())
-
+    
+    def _ee_to_joint(self, action: torch.Tensor, current: torch.Tensor) -> torch.Tensor:
+        ee_pose, gripper = vec_to_pose(action.numpy())
+        desired = ee_pose if self.ee_mode == "abs" else self._delta_pose(ee_pose)
+        cmd = self.kinematics.ik(current.numpy(), desired, position_only=False)
+        return torch.from_numpy(np.concatenate([cmd[:-1], [gripper]]).astype(np.float32))
+    
     def _delta_pose(self, ee_pose: np.ndarray) -> np.ndarray:
         if self._leader_ee_ref is None:
             self._leader_ee_ref = ee_pose.copy()
@@ -101,16 +119,13 @@ class EEManipulatorDecorator:
     # ------------------------------------------------------------------
     def capture_observation(self):
         obs = self.robot.capture_observation()
-        obs["observation.state"] = torch.from_numpy(self._to_ee(obs["observation.state"]))
+        obs["observation.state"] = torch.from_numpy(self._joint_to_ee(obs["observation.state"]))
         return obs
 
     def send_action(self, action: torch.Tensor) -> torch.Tensor:
         # 1) EE → joint command
-        ee_pose, gripper = vec_to_pose(action.numpy())
         current = torch.from_numpy(self.robot.follower_arms["main"].read("Present_Position"))
-        desired = ee_pose if self.ee_mode == "abs" else self._delta_pose(ee_pose)
-        cmd = self.kinematics.ik(current.numpy(), desired, position_only=False)
-        cmd_t = torch.from_numpy(np.concatenate([cmd[:-1], [gripper]]).astype(np.float32))
+        cmd_t = self._ee_to_joint(action, current)
 
         # 2) send & grab what *really* went out
         sent_joints = self.robot.send_action(cmd_t)
@@ -130,8 +145,8 @@ class EEManipulatorDecorator:
             print("joint obs:", _fmt(obs["observation.state"]),
                   "| joint act:", _fmt(action["action"]))
 
-        obs["observation.state"] = torch.from_numpy(self._to_ee(obs["observation.state"]))
-        action["action"] = torch.from_numpy(self._to_ee(action["action"]))
+        obs["observation.state"] = torch.from_numpy(self._joint_to_ee(obs["observation.state"]))
+        action["action"] = torch.from_numpy(self._joint_to_ee(action["action"]))
 
         if DEBUG:
             print("ee obs:", _fmt(obs["observation.state"]),

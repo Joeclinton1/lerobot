@@ -14,7 +14,7 @@
 
 import abc
 from dataclasses import dataclass, field
-from typing import Sequence
+from typing import Sequence, Literal
 
 import draccus
 
@@ -59,6 +59,10 @@ class ManipulatorRobotConfig(RobotConfig):
 
     # config parameter to enable end effector space on actions and proprioceptive observations
     use_ee_space: bool = False
+    hand_track_enable: bool = False
+    hand_track_viz: bool = True
+    hand_track_cam: int = 0
+    hand_track_hand: Literal["right", "left"] = "right"
 
     def __post_init__(self):
         if self.mock:
