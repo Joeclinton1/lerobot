@@ -1,32 +1,36 @@
-"""
-EE‑space utilities (Euler‑angle edition)
-========================================
-This module contains two closely‑related utilities:
+# ruff: noqa: N806 N803
 
-* ``EEManipulatorDecorator`` – wraps a *ManipulatorRobot* to expose its
-  control and observation interface in **end‑effector space** using Euler
+"""
+EE-space utilities (Euler-angle edition)
+========================================
+This module contains two closely-related utilities:
+
+* ``EEManipulatorDecorator`` - wraps a *ManipulatorRobot* to expose its
+  control and observation interface in **end-effector space** using Euler
   angles instead of quaternions:
 
       [x, y, z, roll, pitch, yaw, gripper]
 
-  where the angles are intrinsic **XYZ** (roll‑pitch‑yaw) in *radians*.
+  where the angles are intrinsic **XYZ** (roll-pitch-yaw) in *radians*.
 
-* ``render_debug_scene`` – a lightweight Matplotlib visualiser that plots
+* ``render_debug_scene`` - a lightweight Matplotlib visualiser that plots
   the current EE observation (red) against a commanded EE action (green).
 
-Both pieces rely on the same helper conversions between joint‑space and
-EE‑space as well as Euler <‑‑> rotation‑matrix utilities.
+Both pieces rely on the same helper conversions between joint-space and
+EE-space as well as Euler <--> rotation-matrix utilities.
 """
 from __future__ import annotations
 
+from math import radians as rad
+
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from scipy.spatial.transform import Rotation
-import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+from scipy.spatial.transform import Rotation
 
 from lerobot.common.robot_devices.robots.kinematics import RobotKinematics
-from math import radians as rad
+
 # -----------------------------------------------------------------------------
 # Global switch for console logging + live visualisation
 # -----------------------------------------------------------------------------
@@ -45,18 +49,18 @@ SAFE_RANGE = {
 }
 
 # -----------------------------------------------------------------------------
-# EE‑space ⇄ SE(3) helpers
+# EE-space ⇄ SE(3) helpers
 # -----------------------------------------------------------------------------
 
 def pose_to_vec(ee_pose: np.ndarray, gripper: float) -> np.ndarray:
-    """Convert a 4×4 homogeneous pose into our 7‑D EE vector."""
+    """Convert a 4x4 homogeneous pose into our 7-D EE vector."""
     pos = ee_pose[:3, 3]
     euler = Rotation.from_matrix(ee_pose[:3, :3]).as_euler("xyz")
     return np.concatenate([pos, euler, [gripper]]).astype(np.float32)
 
 
 def vec_to_pose(vec: np.ndarray) -> tuple[np.ndarray, float]:
-    """Inverse of :func:`pose_to_vec`. Returns (4×4 pose, gripper)."""
+    """Inverse of :func:`pose_to_vec`. Returns (4x4 pose, gripper)."""
     if vec.shape[-1] != 7:
         raise ValueError("EE vector must have 7 elements [x,y,z,r,p,y,gripper]")
     pos, euler, gripper = vec[:3], vec[3:6], vec[6]
@@ -67,11 +71,11 @@ def vec_to_pose(vec: np.ndarray) -> tuple[np.ndarray, float]:
 
 
 # -----------------------------------------------------------------------------
-# EE‑space decorator
+# EE-space decorator
 # -----------------------------------------------------------------------------
 
 class EEManipulatorDecorator:
-    """Decorator adding EE‑space control/observation to a *ManipulatorRobot*."""
+    """Decorator adding EE-space control/observation to a *ManipulatorRobot*."""
 
     def __init__(self, robot, ee_mode: str = "abs"):
         assert ee_mode in {"abs", "delta"}, "ee_mode must be 'abs' or 'delta'"
@@ -85,7 +89,7 @@ class EEManipulatorDecorator:
             self.ax = self.fig.add_subplot(111, projection="3d")
 
     # ------------------------------------------------------------------
-    # Attribute proxying – expose the wrapped robot as‑is
+    # Attribute proxying - expose the wrapped robot as-is
     # ------------------------------------------------------------------
     def __getattr__(self, name):
         return getattr(self.robot, name)
@@ -110,7 +114,7 @@ class EEManipulatorDecorator:
 
         delta = ee_pose - self._leader_ee_ref
         desired = self._leader_ee_ref.copy()
-        desired[:3, 3] += delta[:3, 3]  # position‑only delta
+        desired[:3, 3] += delta[:3, 3]  # position-only delta
         self._leader_ee_ref = ee_pose
         return desired
 
@@ -184,7 +188,7 @@ class EEManipulatorDecorator:
 # -----------------------------------------------------------------------------
 
 def _vec_to_transform(vec: np.ndarray) -> np.ndarray:
-    """Convert our 7‑D EE vector into a 4×4 transform."""
+    """Convert our 7-D EE vector into a 4x4 transform."""
     pos = vec[:3]
     euler = vec[3:6]
     R = Rotation.from_euler("xyz", euler).as_matrix()
@@ -232,7 +236,7 @@ def _draw_cube(ax, T: np.ndarray, color: str, size: float = 0.1):
 
 
 def render_debug_scene(obs_vec: np.ndarray, act_vec: np.ndarray, ax=None):
-    """Visualise EE observation vs action in 3‑D (red vs. green)."""
+    """Visualise EE observation vs action in 3-D (red vs. green)."""
     T_obs = _vec_to_transform(obs_vec)
     T_act = _vec_to_transform(act_vec)
 
@@ -245,7 +249,7 @@ def render_debug_scene(obs_vec: np.ndarray, act_vec: np.ndarray, ax=None):
     _draw_cube(ax, T_obs, color="red", size=0.1)
     _draw_cube(ax, T_act, color="green", size=0.1)
 
-    # Axis limits: X & Z non‑negative, Y symmetric
+    # Axis limits: X & Z non-negative, Y symmetric
     ax.set_xlim(0, 0.5)
     ax.set_ylim(-0.5, 0.5)
     ax.set_zlim(0, 0.5)

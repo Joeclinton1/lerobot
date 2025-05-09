@@ -1,18 +1,27 @@
+# ruff: noqa: N806 N803
+
+import time
+from math import radians as rad
+from typing import Literal, Optional
+
 import cv2
 import numpy as np
 import torch
-import time
-from typing import Literal, Optional
+from pynput import keyboard
+from scipy.spatial.transform import Rotation
 from wilor_mini.pipelines.wilor_hand_pose3d_estimation_pipeline import (
     WiLorHandPose3dEstimationPipeline,
 )
-from pynput import keyboard
-from math import radians as rad
-from math import degrees as deg
+
+# ee_vec = [ x y z | R(3×3) row–major | gripper ]
+EE_LEN = 13          # 3 + 9 + 1
+POS_SL  = slice(0, 3)
+ROT_SL  = slice(3, 12)
+GRIP_ID = 12
 
 class HandPoseTracker:
     # ── configuration ──────────────────────────────────────────────
-    DEBUG: bool = True
+    DEBUG: bool = False
     FOCAL_RATIO: float = 0.7
     CAM_ORIGIN = np.array([0, 0.24, 0.6])
 
@@ -32,9 +41,10 @@ class HandPoseTracker:
         self.show_viz = show_viz
         self.hand = hand
         self._ema_fps = None
-        self.initial_vec: Optional[np.ndarray] = None
+        self.initial_pos: Optional[np.ndarray] = None
+        self.initial_R:   Optional[np.ndarray] = None
         self.initial_follower_vec: Optional[np.ndarray] = None
-        self.prev_vec: np.ndarray = np.zeros(7)
+        self.prev_vec: np.ndarray = np.zeros(EE_LEN)
         self.cam_pos = None
         self.tracking_paused = False
         listener = keyboard.Listener(
@@ -43,44 +53,32 @@ class HandPoseTracker:
         )
         listener.start()
 
+        self.R_wilor_to_robot = np.array([
+            [0, 0, 1],  # new X = old Z
+            [-1, 0, 0],  # new Y = old X
+            [0, -1, 0],  # new Z = old Y
+        ]) # Wilor uses a standard opengl convention, but our robot arm kinematics expects this instead.
+
 
     # ───────────────────────── math helpers ────────────────────────
     @staticmethod
     def _normalize(v: np.ndarray) -> np.ndarray:
         n = np.linalg.norm(v)
         return v / n if n > 1e-8 else np.zeros_like(v)
-
-    @staticmethod
-    def _mat_to_rpy(R: np.ndarray) -> tuple[float, float, float]:
-        sy = np.hypot(R[0, 0], R[1, 0])
-        pitch = np.arctan2(-R[2, 0], sy)
-        if sy < 1e-6:
-            return np.arctan2(-R[1, 2], R[1, 1]), pitch, 0.0
-        return (
-            np.arctan2(R[2, 1], R[2, 2]),
-            pitch,
-            np.arctan2(R[1, 0], R[0, 0]),
-        )
     
     @staticmethod
-    def _mat_to_rpy_xyz(R: np.ndarray) -> tuple[float, float, float]:
-        sp = R[0, 2]
-        pitch = -np.arcsin(sp)
-        cp = np.sqrt(1 - sp ** 2)
-        if cp < 1e-6:
-            roll = np.arctan2(-R[1, 0], R[1, 1])
-            yaw = 0.0
-        else:
-            roll = np.arctan2(R[1, 2], R[2, 2])
-            yaw = np.arctan2(R[0, 1], R[0, 0])
-        return roll, pitch, yaw
+    def rotmat_lh_to_rpy_zyx(R: np.ndarray) -> np.ndarray:
+        """
+        Returns [roll, pitch, yaw] using intrinsic ZYX order for a left-handed matrix.
+        """
+        return Rotation.from_matrix(R).as_euler("ZYX")[::-1]
     
     def stop_tracking(self):
         self.tracking_paused = True
 
     def restart_tracking(self):
         self.tracking_paused = False
-        self.initial_vec = None
+        self.initial_pos = None
         self.initial_follower_vec = None
 
     def _project_points_3d_to_2d(self, pts3d: np.ndarray, image_shape, focal: float = 600):
@@ -105,14 +103,13 @@ class HandPoseTracker:
 
         x_raw = self._normalize(middle_base - index_base)
         y_axis = self._normalize(thumb_mcp - index_base)
-        z_axis = self._normalize(np.cross(y_axis, x_raw))
+        z_axis = self._normalize(np.cross(x_raw, y_axis))
         x_axis = self._normalize(np.cross(y_axis, z_axis))
-        R = np.column_stack([x_axis, y_axis, z_axis])
-        R = R[:, [2, 0, 1]]
-        R *= np.array([[1, -1, -1]] if is_right else [[-1, 1, -1]]) # hack to fix the axes orientation
-
-        roll, pitch, yaw = self._mat_to_rpy_xyz(R)
-        roll, pitch, yaw = -pitch, roll, yaw # Another hack to fix orientations
+        R_wilor = np.row_stack([x_axis, y_axis, z_axis])
+    
+        R_robot = self.R_wilor_to_robot @ R_wilor @ self.R_wilor_to_robot.T  # rexpresses hand orientation in robot world frame instead instead of wilor world frame
+        axes = self.R_wilor_to_robot  @ R_wilor
+        # R *= np.array([[1, -1, -1]] if is_right else [[-1, 1, -1]]) # hack to fix the axes orientation
         origin = 0.5 * (index_base + middle_base)
 
         base = origin
@@ -137,17 +134,19 @@ class HandPoseTracker:
 
         origin_t = origin * np.array([-1, 1, -z_scale])
         origin_t = origin_t[[2, 0, 1]]
-        vec7 = np.array([*origin_t, roll, pitch, yaw, grip_angle], dtype=np.float32)
+        vec13 = np.concatenate([origin_t,
+                            R_robot.flatten(),        # 9 numbers, row‑major
+                            [grip_angle]]).astype(np.float32)
 
-        return dict(
-            origin=origin,
-            axes=R,
-            tip=tip,
-            thumb_root=thumb_root,
-            thumb_proj=vec2,
-            angle=grip_angle,
-            vec7=vec7,
-        )
+        return {
+            "origin": origin,
+            "axes": axes,
+            "tip": tip,
+            "thumb_root": thumb_root,
+            "thumb_proj": vec2,
+            "angle": grip_angle,
+            "vec13": vec13,
+        }
 
     # --‑‑‑‑ drawing helpers (kept mostly unchanged) ‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑
     def _draw_3d_line(self, im, start, end, color, focal, arrow=True):
@@ -160,10 +159,10 @@ class HandPoseTracker:
             cv2.line(im, tuple(pts[0]), tuple(pts[1]), color, 2)
 
     def _draw_gripper_axes(self, im, origin, axes, focal, length=0.03):
-        for i, col in enumerate([(0, 0, 255), (0, 255, 0), (255, 0, 0)]):
-            self._draw_3d_line(
-                im, origin, origin + axes[:, i] * length, col, focal, arrow=True
-            )
+        # X (red), Y (green), Z (blue) in BGR
+        colors = [(0, 0, 255), (0, 255, 0), (255, 0, 0)]
+        for i in range(3):  # 0: X, 1: Y, 2: Z
+            self._draw_3d_line(im, origin, origin + axes[i] * length, colors[i], focal)
         return im
 
     def _draw_gripper_vectors(self, im, base, tip, thumb_root, thumb_proj, focal):
@@ -174,54 +173,44 @@ class HandPoseTracker:
         self._draw_3d_line(im, thumb_root, base, (180, 180, 180), focal, False)
         return im
     
-    def _draw_gripper_info_text(self, im, base, vec7, focal):
-        pos = self._project_points_3d_to_2d(
-            base[None], im.shape[:2], focal
-        )[0]
-        # Gripper Position
-        cv2.putText(
-            im,
-            f"x:{vec7[0]:.2f}, y:{vec7[1]:.2f}, z:{vec7[2]:.2f}",
-            tuple(pos + np.array([10, -10])),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            (255, 255, 255),
-            2,
-        )
+    def _draw_gripper_info_text(self, im, base, vec13, focal):
+        pos = self._project_points_3d_to_2d(base[None], im.shape[:2], focal)[0]
 
-        # Gripper Orientation
-        cv2.putText(
-            im,
-            f"u:{deg(vec7[3]):.0f}, v:{deg(vec7[4]):.0f}, w:{deg(vec7[5]):.0f}",
-            tuple(pos + np.array([10, 10])),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            (255, 255, 255),
-            2,
-        )
+        # position
+        x, y, z = vec13[POS_SL]
+        cv2.putText(im, f"x:{x:.2f}, y:{y:.2f}, z:{z:.2f}",
+                    tuple(pos + np.array([10, -10])),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
 
-        # Gripper Angle
-        cv2.putText(im, f"{vec7[6]:.1f} deg", tuple(pos + np.array([10, 30])),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        
+        # orientation (convert only for display)
+        R = vec13[ROT_SL].reshape(3,3)
+         
+        roll, pitch, yaw = np.degrees(self.rotmat_lh_to_rpy_zyx(R))
+        cv2.putText(im, f"u:{roll:.0f}, v:{pitch:.0f}, w:{yaw:.0f}",
+                    tuple(pos + np.array([10, 10])),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
+
+        # gripper
+        cv2.putText(im, f"{vec13[GRIP_ID]:.1f} deg",
+                    tuple(pos + np.array([10, 30])),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
         return im
 
-        
-
     # ───────────────────────── public API ───────────────────────────
-    def read_hand_state(self, follower_vec7) -> Optional[np.ndarray]:
+    def read_hand_state(self, follower_vec13) -> Optional[np.ndarray]:
         # Read and flip the camera frame
         ok, frame = self.cap.read()
         if not ok:
             raise RuntimeError("Camera read failed")
         frame = cv2.flip(frame, 1)
         hand = "left" if self.hand == "right" else "left"  # mirror correction
- 
+
+        R_rel = None
+        # Set or copy follower pose baseline
         if self.initial_follower_vec is None:
-            initial_follower_vec = follower_vec7.copy()
+            initial_follower_vec = follower_vec13.copy()
             self.initial_follower_vec = initial_follower_vec
         else:
-            # snapshot initial_follower_vec to avoid race condition with restart_tracking
             initial_follower_vec = self.initial_follower_vec.copy()
 
         # Handle paused tracking
@@ -232,12 +221,10 @@ class HandPoseTracker:
             preds = self.pipe.predict(frame_rgb)
             matching_preds = [p for p in preds if p["is_right"] == (hand == "right")]
 
-            # Handle non-detection of hand
             if not matching_preds:
-                result = np.zeros(7)
+                result = self.prev_vec.copy() if self.prev_vec is not None else np.zeros(EE_LEN, dtype=np.float32)
             else:
                 p = matching_preds[0]
-                # Transform 3D keypoints into camera space
                 focal = self.FOCAL_RATIO * frame.shape[1]
                 z_scale = focal / p["wilor_preds"]["scaled_focal_length"]
                 self.cam_pos = self.CAM_ORIGIN / np.array([1, 1, -z_scale])
@@ -250,57 +237,76 @@ class HandPoseTracker:
                 kps3 += self.cam_pos
 
                 info = self._compute_gripper_pose(kps3, z_scale, p["is_right"])
-                vec7 = info["vec7"]
+                vec13 = info["vec13"]
 
                 # Offset to make output relative to initial position
-                if self.initial_vec is None:
-                    self.initial_vec = vec7.copy()
+                if self.initial_pos is None:
+                    self.initial_pos = vec13[POS_SL].copy()
+                    self.initial_R = vec13[ROT_SL].reshape(3, 3).copy()
 
-                vec7[:3] = vec7[:3] - self.initial_vec[:3]
-                vec7[3:6] = vec7[3:6] - self.initial_vec[3:6] # Maybe euler angles won't work this nicely?
-                self.prev_vec = vec7.copy()
-                result = vec7
+                # relative pose
+                vec13[POS_SL] -= self.initial_pos
+                R_now = vec13[ROT_SL].reshape(3, 3).copy()
+                R_rel = R_now @ self.initial_R.T.copy()
+                vec13[ROT_SL] = R_rel.reshape(-1)
 
-                # Add gripper visualization
-                if self.show_viz:
-                    focal2 = p["wilor_preds"]["scaled_focal_length"]
-                    frame = self._draw_gripper_axes(
-                        frame, 
-                        info["origin"], 
-                        info["axes"], 
-                        focal2
-                    )
-                    frame = self._draw_gripper_vectors(
-                        frame,
-                        info["origin"],
-                        info["tip"],
-                        info["thumb_root"],
-                        info["thumb_proj"],
-                        focal2
-                    )
-                    frame = self._draw_gripper_info_text(
-                        frame,
-                        info["origin"],
-                        vec7,
-                        focal2
-                    )
+                self.prev_vec = vec13.copy()
+                result = vec13
 
-        # Display result frame
+        # Compose final absolute pose
+        result[POS_SL] += initial_follower_vec[POS_SL]
+
+        R_base = initial_follower_vec[ROT_SL].reshape(3, 3)
+        R_final = result[ROT_SL].reshape(3, 3) @ R_base
+        result[ROT_SL] = R_final.reshape(-1)
+
+        # NOTE: gripper remains unmodified (taken from hand)
+
+        # Draw visualisation using final composed pose
+        if self.show_viz and not self.tracking_paused and matching_preds:
+            focal2 = p["wilor_preds"]["scaled_focal_length"]
+            frame = self._draw_gripper_axes(frame, info["origin"], info["axes"], focal2)
+            frame = self._draw_gripper_vectors(
+                frame, info["origin"], info["tip"], info["thumb_root"], info["thumb_proj"], focal2
+            )
+            # if(R_rel is not None):
+            #     print(R_rel.reshape(-1))
+            #     result[ROT_SL] = R_rel.reshape(-1)
+            #     frame = self._draw_gripper_info_text(frame, info["origin"], result, focal2)
+            frame = self._draw_gripper_info_text(frame, info["origin"], result, focal2)
+
+        # Show the frame
         if self.show_viz:
             cv2.imshow("WiLor Hand Pose 3D", frame)
             cv2.waitKey(1)
 
-        result[:6] += initial_follower_vec[:6] # we apply our position and rotation to the initial follower vec
         return result
 
     def loop(self):
-        
-        follower_vec7 = np.array([20,0,1,rad(-90), rad(45), rad(0), 5]) # Approximately the follower rest position
+        from scipy.spatial.transform import Rotation as R  # noqa: N817
+
+        # Define follower rest pose in 13D format: [x y z | R (row-major) | gripper]
+        follower_pos = [0.2, 0, 0.1]
+
+        # Desired orientation: yaw→pitch→roll = [0°, 45°, -90°]
+        yaw, pitch, roll = rad(0), rad(45), rad(-90)
+        follower_grip = 5
+
+        # ZYX for an intrinsic rotation around yaw → pitch → roll
+        follower_rot = R.from_euler("ZYX", [yaw, pitch, roll]).as_matrix()
+
+        # Flatten the matrix and build the full 13D vector
+        follower_vec13 = np.concatenate([
+            follower_pos,
+            follower_rot.flatten(),
+            [follower_grip]
+        ]).astype(np.float32)
+
         alpha = 0.1
         while self.cap.isOpened():
             t0 = time.time()
             try:
-                vec7 = self.read_hand_state(follower_vec7)
+                vec13 = self.read_hand_state(follower_vec13)
             except RuntimeError:
                 break
 
@@ -308,9 +314,14 @@ class HandPoseTracker:
             self._ema_fps = (
                 fps if self._ema_fps is None else (1 - alpha) * self._ema_fps + alpha * fps
             )
+
             if self.DEBUG:
-                if vec7 is not None:
-                    print(f"Vec: {vec7.round(3)} | ", end="")
+                if vec13 is not None:
+                    pos = vec13[POS_SL]
+                    rotmat = vec13[ROT_SL].reshape(3,3)
+                    eul = np.degrees(self.rotmat_lh_to_rpy_zyx(rotmat))
+                    grip = vec13[GRIP_ID]
+                    print(f"Pos: {pos.round(2)}, Euler: {eul.round(1)}, Grip: {grip:.1f} | ", end="")
                 print(f"FPS: {self._ema_fps:.1f}")
 
             if cv2.waitKey(1) in (27, ord("q")):
