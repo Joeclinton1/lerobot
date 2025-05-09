@@ -53,8 +53,8 @@ class HandTracker:
 
     def restart_tracking(self):
         self.tracking_paused = False
-        self.initial_pos = None
-        self.initial_follower_vec = None
+        self.pose_computer.initial_pos = None
+        self.pose_computer.initial_follower_vec = None
 
     # ───────────────────────── public API ───────────────────────────
     def read_hand_state(self, follower_vec13) -> Optional[np.ndarray]:
