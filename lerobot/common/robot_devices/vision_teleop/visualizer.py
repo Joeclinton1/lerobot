@@ -52,7 +52,6 @@ class HandPoseVisualizer:
         return im
     
     def draw_all(self, frame, origin_pos, axes, vec13, info: dict, focal, cam_pos):
-        print(origin_pos)
         self.cam_pos = cam_pos
         frame = self.draw_gripper_axes(frame, origin_pos, axes, focal)
         frame = self.draw_gripper_vectors(frame, origin_pos,

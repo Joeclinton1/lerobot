@@ -19,11 +19,12 @@ ROT_SL = slice(3, 12)
 GRIP_ID = 12
 
 def rotmat_lh_to_rpy_zyx(R: np.ndarray) -> np.ndarray:
-        return Rotation.from_matrix(R).as_euler("ZYX")[::-1]
+    return Rotation.from_matrix(R).as_euler("ZYX")[::-1]
 
 class HandPoseComputer:
     FOCAL_RATIO: float = 0.7
     CAM_ORIGIN = np.array([0, 0.24, 0.6])
+    GRIP_ANGLE_OFFSET: int = -2 # Subtracted from the raw gripper angle to ensure we can pick up small objects
 
     def __init__(
         self,
@@ -41,7 +42,8 @@ class HandPoseComputer:
         self.step = 0
         self.run_every = inference_interval
 
-        self.prev_vec = self.zero_vec13()
+        self.prev_vec = self.zero_vec13() # stores the relative vec 13 between current wilor pose and initial
+        self.raw_vec = None # store the raw unprocessed vector that wilor gives for visualisation purposes
         self.initial_pos = None
         self.initial_R = None
         self.initial_follower_vec = None
@@ -50,6 +52,8 @@ class HandPoseComputer:
         self.last_focal2 = 12500
         self.cam_pos = None
         self.z_scale = None
+
+        self.hand_detected = False
 
         self.R_wilor_to_robot = np.array([
             [0, 0, 1],
@@ -69,20 +73,29 @@ class HandPoseComputer:
         return vec13
 
     def compute_pose(self, frame: np.ndarray, paused: bool, dt: float) -> np.ndarray:
-        self.step += 1
-
         if paused:
             return self.prev_vec.copy()
 
-        if self.step % self.run_every != 0:
-            self.kf.predict(dt)
+        self.step += 1
+        self.kf.predict(dt)
+        if self.hand_detected and self.step % self.run_every != 0:
             vec13 = self.prev_vec.copy()
             vec13[POS_SL] = self.kf.x[:3]
-            return self._to_relative_pose(vec13)
+            self.prev_vec = vec13.copy()
+            return vec13
 
-        
-        vec13 = self._get_absolute_pose(frame)
-        return self._to_relative_pose(vec13)
+        vec13 = self._get_absolute_pose(frame, dt)
+        if vec13 is None:
+            self.hand_detected = False
+            return self.prev_vec.copy()
+
+        self.hand_detected = True
+        self.raw_vec = vec13.copy() # store absolute vec13 for visualisation purposes
+        vec13 = self._to_relative_pose(vec13)
+        self.kf.update(vec13[POS_SL])
+        vec13[POS_SL] = self.kf.x[:3]
+        self.prev_vec = vec13.copy()
+        return vec13
 
     def compose_absolute_pose(self, rel_pose: np.ndarray, follower_vec: np.ndarray) -> np.ndarray:
         if self.initial_follower_vec is None:
@@ -96,14 +109,14 @@ class HandPoseComputer:
         result[ROT_SL] = (R_rel @ R_base).reshape(-1)
         return result
 
-    def _get_absolute_pose(self, frame: np.ndarray) -> np.ndarray:
+    def _get_absolute_pose(self, frame: np.ndarray, dt: float) ->  Optional[np.ndarray]:
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         preds = self.pipe.predict(frame_rgb)
         corrected_hand = "left" if self.hand == "right" else "right"
         matching_preds = [p for p in preds if p["is_right"] == (corrected_hand == "right")]
 
         if not matching_preds:
-            return self.prev_vec.copy()
+            return None
 
         p = matching_preds[0]
         focal = self.FOCAL_RATIO * frame.shape[1]
@@ -117,11 +130,6 @@ class HandPoseComputer:
 
         info, vec13 = self._compute_gripper_pose(kps3, self.z_scale)
         self.last_info = info
-
-        self.kf.predict()
-        self.kf.update(vec13[POS_SL])
-        vec13[POS_SL] = self.kf.x[:3]
-        self.prev_vec = vec13.copy()
         return vec13
 
     def _to_relative_pose(self, abs_pose: np.ndarray) -> np.ndarray:
@@ -136,6 +144,7 @@ class HandPoseComputer:
 
         pose[POS_SL] = pos_rel
         pose[ROT_SL] = R_rel.reshape(-1)
+
         return pose
 
     def _compute_gripper_pose(self, kps3: np.ndarray, z_scale: float) -> tuple[dict, np.ndarray]:
@@ -173,6 +182,7 @@ class HandPoseComputer:
         angle_rad = np.arccos(np.clip(np.dot(self._normalize(vec1), self._normalize(vec2)), -1.0, 1.0))
         grip_angle = np.degrees(angle_rad) * np.sign(np.dot(np.cross(vec2, vec1), plane_n))
         grip_angle -= closed_angle
+        grip_angle += self.GRIP_ANGLE_OFFSET
 
         origin_t = origin * np.array([-1, 1, -z_scale])
         origin_t = origin_t[[2, 0, 1]]

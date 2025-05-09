@@ -1,5 +1,3 @@
-# run_tracker.py
-
 import time
 from math import radians as rad
 
@@ -10,7 +8,7 @@ from scipy.spatial.transform import Rotation as R  # noqa: N817
 from lerobot.common.robot_devices.vision_teleop.hand_pose import GRIP_ID, POS_SL, ROT_SL, rotmat_lh_to_rpy_zyx
 from lerobot.common.robot_devices.vision_teleop.hand_tracking import HandTracker
 
-DEBUG = False
+DEBUG = True
 
 def main():
     tracker = HandTracker(cam_idx=1, hand="right")

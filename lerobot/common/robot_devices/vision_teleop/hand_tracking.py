@@ -24,7 +24,6 @@ class HandTracker:
         self.show_viz = show_viz
         self.tracking_paused = True
         self.last_t = time.time()
-        self.step = 0
         self._ema_fps = None
 
         self.pose_computer = HandPoseComputer(device=device, hand=hand, inference_interval=2)
@@ -64,10 +63,10 @@ class HandTracker:
             raise RuntimeError("Camera read failed")
         frame = cv2.flip(frame, 1)
 
-        # Update frame timing
-        self.step += 1
-        dt = time.time() - self.last_t
-        self.last_t = time.time()
+        dt = 0
+        if not self.tracking_paused:
+            dt = time.time() - self.last_t
+            self.last_t = time.time()
 
         # Pose estimation (relative)
         rel_pose = self.pose_computer.compute_pose(frame, paused=self.tracking_paused, dt=dt)
@@ -79,8 +78,8 @@ class HandTracker:
         if self.show_viz and not self.tracking_paused and self.pose_computer.last_info is not None:
             focal2 = self.pose_computer.last_focal2
             origin_scale = np.array([-1, 1, -1 / self.pose_computer.z_scale])
-            origin_pos = self.pose_computer.prev_vec[POS_SL][[1, 2, 0]] * origin_scale
-            axes = self.pose_computer.prev_vec[ROT_SL].reshape(3, 3) @ self.pose_computer.R_wilor_to_robot
+            origin_pos = self.pose_computer.raw_vec[POS_SL][[1, 2, 0]] * origin_scale
+            axes = self.pose_computer.raw_vec[ROT_SL].reshape(3, 3) @ self.pose_computer.R_wilor_to_robot
 
             frame = self.visualizer.draw_all(
                 frame,
