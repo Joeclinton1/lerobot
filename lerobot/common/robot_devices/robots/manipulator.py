@@ -30,13 +30,14 @@ import numpy as np
 import torch
 
 from lerobot.common.robot_devices.cameras.utils import make_cameras_from_configs
-from lerobot.common.robot_devices.hand_tracking import EE_LEN, GRIP_ID, POS_SL, ROT_SL, HandPoseTracker
 from lerobot.common.robot_devices.motors.utils import MotorsBus, make_motors_buses_from_configs
 from lerobot.common.robot_devices.robots.configs import ManipulatorRobotConfig
 from lerobot.common.robot_devices.robots.ee_manipulator import SAFE_RANGE
 from lerobot.common.robot_devices.robots.kinematics import RobotKinematics
 from lerobot.common.robot_devices.robots.utils import get_arm_id
 from lerobot.common.robot_devices.utils import RobotDeviceAlreadyConnectedError, RobotDeviceNotConnectedError
+from lerobot.common.robot_devices.vision_teleop.hand_pose import EE_LEN, GRIP_ID, POS_SL, ROT_SL
+from lerobot.common.robot_devices.vision_teleop.hand_tracking import HandTracker
 
 
 def ensure_safe_goal_position(
@@ -173,7 +174,7 @@ class ManipulatorRobot:
         self.logs = {}
         if self.config.hand_track_enable:
             self.kinematics = RobotKinematics(self.robot_type)
-            self.hand_tracker = HandPoseTracker(
+            self.hand_tracker = HandTracker(
                 cam_idx=self.config.hand_track_cam,
                 show_viz=self.config.hand_track_viz,
                 hand=self.config.hand_track_hand
@@ -467,8 +468,7 @@ class ManipulatorRobot:
         if self.config.hand_track_enable:
             cur = self.follower_arms["main"].read("Present_Position")
             follower_ee = self.joint_to_ee(cur)
-            hand_ee = self.hand_tracker.read_hand_state(follower_vec13=follower_ee
-                                                        )
+            hand_ee = self.hand_tracker.read_hand_state(follower_vec13=follower_ee)
             return {"main": torch.from_numpy(self.ee_to_joint(hand_ee, cur))}
         else:
             leader_pos = {}
