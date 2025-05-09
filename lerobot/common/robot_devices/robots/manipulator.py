@@ -18,27 +18,25 @@ and send orders to its motors.
 # TODO(rcadene, aliberts): reorganize the codebase into one file per robot, with the associated
 # calibration procedure, to make it easy for people to add their own robot.
 
+# ruff: noqa: N806 N803
+
 import json
 import logging
 import time
 import warnings
 from pathlib import Path
-import cv2
+
 import numpy as np
 import torch
-from math import radians as rad
+
 from lerobot.common.robot_devices.cameras.utils import make_cameras_from_configs
+from lerobot.common.robot_devices.hand_tracking import EE_LEN, GRIP_ID, POS_SL, ROT_SL, HandPoseTracker
 from lerobot.common.robot_devices.motors.utils import MotorsBus, make_motors_buses_from_configs
 from lerobot.common.robot_devices.robots.configs import ManipulatorRobotConfig
+from lerobot.common.robot_devices.robots.ee_manipulator import SAFE_RANGE
+from lerobot.common.robot_devices.robots.kinematics import RobotKinematics
 from lerobot.common.robot_devices.robots.utils import get_arm_id
 from lerobot.common.robot_devices.utils import RobotDeviceAlreadyConnectedError, RobotDeviceNotConnectedError
-
-from lerobot.common.robot_devices.robots.kinematics import RobotKinematics
-from lerobot.common.robot_devices.robots.ee_manipulator import vec_to_pose, SAFE_RANGE, pose_to_vec
-from lerobot.common.robot_devices.hand_tracking import HandPoseTracker
-from wilor_mini.pipelines.wilor_hand_pose3d_estimation_pipeline import (
-    WiLorHandPose3dEstimationPipeline,
-)
 
 
 def ensure_safe_goal_position(
@@ -469,7 +467,8 @@ class ManipulatorRobot:
         if self.config.hand_track_enable:
             cur = self.follower_arms["main"].read("Present_Position")
             follower_ee = self.joint_to_ee(cur)
-            hand_ee = self.hand_tracker.read_hand_state(follower_vec7=follower_ee)
+            hand_ee = self.hand_tracker.read_hand_state(follower_vec13=follower_ee
+                                                        )
             return {"main": torch.from_numpy(self.ee_to_joint(hand_ee, cur))}
         else:
             leader_pos = {}
@@ -480,48 +479,75 @@ class ManipulatorRobot:
                 self.logs[f"read_leader_{name}_pos_dt_s"] = time.perf_counter() - before_lread_t
             return leader_pos
 
-    def ee_to_joint(self, ee_vec:np.ndarray, cur:np.ndarray) -> np.ndarray:
-        # Make sure the ee_vec is clipped to safe values
-        clipped = [np.clip(val, *SAFE_RANGE[key]) for val, key in zip(ee_vec, "xyzuvwg")]
+    
+    def pose_to_vec13(self, H: np.ndarray, g: float) -> np.ndarray:
+        vec = np.empty(EE_LEN, np.float32)
+        vec[POS_SL] = H[:3, 3]
+        vec[ROT_SL] = H[:3, :3].reshape(-1)            # row‑major
+        vec[GRIP_ID] = g
+        return vec
 
-        ee_pose, g = vec_to_pose(np.array(clipped))
-        cmd = self.kinematics.ik(cur, ee_pose, position_only=True)
+    def vec13_to_pose(self, vec: np.ndarray) -> tuple[np.ndarray, float]:
+        if vec.shape[-1] != EE_LEN:
+            raise ValueError("EE vec must have 13 elements [x y z R(9) g]")
+        H = np.eye(4, dtype=np.float32)
+        H[:3, 3]  = vec[POS_SL]
+        H[:3, :3] = vec[ROT_SL].reshape(3, 3)
+        return H, float(vec[GRIP_ID])
+
+    def ee_to_joint(self, ee_vec: np.ndarray, cur: np.ndarray) -> np.ndarray:
+        # clip only the scalar fields (x,y,z,gripper)
+        scalar_vals = ee_vec[[*range(3), GRIP_ID]]
+        clipped = [np.clip(v, *SAFE_RANGE[k]) for v, k in zip(scalar_vals, "xyzg", strict=False)]
+
+        # rebuild a fully‑clipped vec13
+        ee_vec_clipped = ee_vec.copy()
+        ee_vec_clipped[POS_SL] = clipped[:3]
+        ee_vec_clipped[GRIP_ID] = clipped[3]
+
+        H, g = self.vec13_to_pose(ee_vec_clipped)
+        cmd = self.kinematics.ik(cur, H, position_only=False)
         return np.concatenate([cmd[:-1], [g]]).astype(np.float32)
     
     def joint_to_ee(self, joint_vec: np.ndarray) -> np.ndarray:
-        ee_pose = self.kinematics.fk_gripper(joint_vec)
-        return pose_to_vec(ee_pose, joint_vec[-1].item())
+        H = self.kinematics.fk_gripper(joint_vec)
+        return self.pose_to_vec13(H, joint_vec[-1].item())
 
     def read_ee_sequence_test(self) -> dict:
-        # Use this function to test the working area
-        import time, math
+        import math
+        import time
 
-        coverage = 0.4 # percent of working area to cover in motion
-        period = 4 # seconds per forward-backwards cycle
+        from scipy.spatial.transform import Rotation as R  # noqa: N817
 
-        def lerp(lo, hi, f): return lo + f * (hi - lo)
+        coverage = 0.4
+        period = 4
+
+        def lerp(lo, hi, f):
+            return lo + f * (hi - lo)
+
         def axis_motion(axis, t_rel):
             f = 0.5 + coverage / 2 * math.sin(2 * math.pi * t_rel / period)
-            pos = {
-                "x": lerp(*SAFE_RANGE["x"], 0.5),
-                "y": lerp(*SAFE_RANGE["y"], 0.5),
-                "z": lerp(*SAFE_RANGE["z"], 0.5)
-            }
+            pos = {k: lerp(*SAFE_RANGE[k], 0.5) for k in "xyz"}
             pos[axis] = lerp(*SAFE_RANGE[axis], f)
-            return np.array([pos["x"], pos["y"], pos["z"], rad(-90), rad(45), rad(0), 10], dtype=np.float32)
 
-        t = time.time() % 14  # 2s center + 3 axes × 4s
+            H = np.eye(4, dtype=np.float32)
+            H[:3, 3] = [pos["x"], pos["y"], pos["z"]]
+            H[:3, :3] = R.from_euler("ZYX", [math.radians(a) for a in [0, 45, -90]]).as_matrix()
+            return self.pose_to_vec13(H, 10)
+
+        t = time.time() % 14
         if t < 2:
-            ee = axis_motion("x", 0)  # center hold
+            ee_vec = axis_motion("x", 0)
         elif t < 6:
-            ee = axis_motion("x", t - 2)
+            ee_vec = axis_motion("x", t - 2)
         elif t < 10:
-            ee = axis_motion("y", t - 6)
+            ee_vec = axis_motion("y", t - 6)
         else:
-            ee = axis_motion("z", t - 10)
+            ee_vec = axis_motion("z", t - 10)
 
         cur = self.follower_arms["main"].read("Present_Position")
-        return {"main": torch.from_numpy(self.ee_to_joint(ee, cur))}
+        print(self.joint_to_ee(cur))
+        return {"main": torch.from_numpy(self.ee_to_joint(ee_vec, cur))}
         
     def teleop_step(
         self, record_data=False

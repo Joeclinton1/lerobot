@@ -44,13 +44,11 @@ class HandPoseTracker:
         self.initial_pos: Optional[np.ndarray] = None
         self.initial_R:   Optional[np.ndarray] = None
         self.initial_follower_vec: Optional[np.ndarray] = None
-        self.prev_vec: np.ndarray = np.zeros(EE_LEN)
+        
+        self.prev_vec: np.ndarray = self.zero_vec13()
         self.cam_pos = None
-        self.tracking_paused = False
-        listener = keyboard.Listener(
-            on_press=lambda key: self.stop_tracking() if key == keyboard.Key.space else None,
-            on_release=lambda key: self.restart_tracking() if key == keyboard.Key.space else None,
-        )
+        self.tracking_paused = True # Start in a paused state. Press space to start.
+        listener = keyboard.Listener(on_press=self.onpress, on_release=self.onrelease)
         listener.start()
 
         self.R_wilor_to_robot = np.array([
@@ -73,6 +71,25 @@ class HandPoseTracker:
         """
         return Rotation.from_matrix(R).as_euler("ZYX")[::-1]
     
+    @staticmethod
+    def zero_vec13() -> np.ndarray:
+        vec13 = np.zeros(EE_LEN, dtype=np.float32)
+        vec13[ROT_SL] = np.eye(3, dtype=np.float32).reshape(-1)
+        return vec13
+
+    def onpress(self, key):
+        if key == keyboard.Key.space:
+            self.stop_tracking()
+        elif key == keyboard.KeyCode.from_char('p'):
+            if self.tracking_paused:
+                self.restart_tracking()
+            else:
+                self.stop_tracking()
+    
+    def onrelease(self, key):
+        if key == keyboard.Key.space:
+            self.restart_tracking()
+        
     def stop_tracking(self):
         self.tracking_paused = True
 
@@ -126,10 +143,10 @@ class HandPoseTracker:
         closed_angle = np.degrees(
             np.arccos(np.clip(np.dot(self._normalize(vec3), self._normalize(vec2)), -1, 1))
         )
-        closed_angle *= np.sign(np.dot(np.cross(vec3, vec2), plane_n))
+        closed_angle *= np.sign(np.dot(np.cross(vec2, vec3), plane_n))
 
         angle_rad = np.arccos(np.clip(np.dot(self._normalize(vec1), self._normalize(vec2)), -1.0, 1.0))
-        grip_angle = np.degrees(angle_rad) * np.sign(np.dot(np.cross(vec1, vec2), plane_n))
+        grip_angle = np.degrees(angle_rad) * np.sign(np.dot(np.cross(vec2, vec1), plane_n))
         grip_angle -= closed_angle
 
         origin_t = origin * np.array([-1, 1, -z_scale])
@@ -222,7 +239,7 @@ class HandPoseTracker:
             matching_preds = [p for p in preds if p["is_right"] == (hand == "right")]
 
             if not matching_preds:
-                result = self.prev_vec.copy() if self.prev_vec is not None else np.zeros(EE_LEN, dtype=np.float32)
+                result = self.prev_vec.copy()
             else:
                 p = matching_preds[0]
                 focal = self.FOCAL_RATIO * frame.shape[1]
@@ -247,7 +264,7 @@ class HandPoseTracker:
                 # relative pose
                 vec13[POS_SL] -= self.initial_pos
                 R_now = vec13[ROT_SL].reshape(3, 3).copy()
-                R_rel = R_now @ self.initial_R.T.copy()
+                R_rel = self.initial_R.T.copy() @ R_now 
                 vec13[ROT_SL] = R_rel.reshape(-1)
 
                 self.prev_vec = vec13.copy()
