@@ -1,5 +1,6 @@
 # ruff: noqa: N806 N803
 
+import time
 from typing import Literal, Optional
 
 import cv2
@@ -18,7 +19,7 @@ POS_SL = slice(0, 3)
 ROT_SL = slice(3, 12)
 GRIP_ID = 12
 
-def rotmat_lh_to_rpy_zyx(R: np.ndarray) -> np.ndarray:
+def rotmat_to_rpy_zyx(R: np.ndarray) -> np.ndarray:
     return Rotation.from_matrix(R).as_euler("ZYX")[::-1]
 
 class HandPoseComputer:
@@ -46,7 +47,6 @@ class HandPoseComputer:
         self.raw_vec = None # store the raw unprocessed vector that wilor gives for visualisation purposes
         self.initial_pos = None
         self.initial_R = None
-        self.initial_follower_vec = None
 
         self.last_info = None
         self.last_focal2 = 12500
@@ -54,11 +54,12 @@ class HandPoseComputer:
         self.z_scale = None
 
         self.hand_detected = False
+        self.last_t = time.time()
 
         self.R_wilor_to_robot = np.array([
             [0, 0, 1],
             [-1, 0, 0],
-            [0, -1, 0],
+            [0, -1, 0]
         ])
 
     @staticmethod
@@ -71,35 +72,48 @@ class HandPoseComputer:
         vec13 = np.zeros(EE_LEN, dtype=np.float32)
         vec13[ROT_SL] = np.eye(3, dtype=np.float32).reshape(-1)
         return vec13
+    
+    @staticmethod
+    def flip_pitch(R_mat):
+        eul = Rotation.from_matrix(R_mat).as_euler("ZYX")
+        eul[1] *= -1  # flip pitch
+        return Rotation.from_euler("ZYX", eul).as_matrix()
+    
+    def kf_predict(self):
+        dt = time.time() - self.last_t
+        self.last_t = time.time()
+        self.kf.predict(dt)
 
-    def compute_pose(self, frame: np.ndarray, paused: bool, dt: float) -> np.ndarray:
+    def compute_pose(self, frame: np.ndarray, paused: bool) -> np.ndarray:
         if paused:
+            self.last_t = time.time()
             return self.prev_vec.copy()
 
         self.step += 1
-        self.kf.predict(dt)
+        
         if self.hand_detected and self.step % self.run_every != 0:
+            self.kf_predict()
             vec13 = self.prev_vec.copy()
             vec13[POS_SL] = self.kf.x[:3]
             self.prev_vec = vec13.copy()
             return vec13
 
-        vec13 = self._get_absolute_pose(frame, dt)
+        vec13 = self._get_absolute_pose(frame)
         if vec13 is None:
+            self.last_t = time.time()
             self.hand_detected = False
             return self.prev_vec.copy()
 
         self.hand_detected = True
         self.raw_vec = vec13.copy() # store absolute vec13 for visualisation purposes
         vec13 = self._to_relative_pose(vec13)
+        self.kf_predict()
         self.kf.update(vec13[POS_SL])
         vec13[POS_SL] = self.kf.x[:3]
         self.prev_vec = vec13.copy()
         return vec13
 
     def compose_absolute_pose(self, rel_pose: np.ndarray, follower_vec: np.ndarray) -> np.ndarray:
-        if self.initial_follower_vec is None:
-            self.initial_follower_vec = follower_vec.copy()
 
         result = rel_pose.copy()
         result[POS_SL] += follower_vec[POS_SL]
@@ -109,7 +123,7 @@ class HandPoseComputer:
         result[ROT_SL] = (R_rel @ R_base).reshape(-1)
         return result
 
-    def _get_absolute_pose(self, frame: np.ndarray, dt: float) ->  Optional[np.ndarray]:
+    def _get_absolute_pose(self, frame: np.ndarray) ->  Optional[np.ndarray]:
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         preds = self.pipe.predict(frame_rgb)
         corrected_hand = "left" if self.hand == "right" else "right"
@@ -141,7 +155,7 @@ class HandPoseComputer:
 
         pos_rel = pose[POS_SL] - self.initial_pos
         R_rel = self.initial_R.T @ pose[ROT_SL].reshape(3, 3)
-
+        R_rel = self.flip_pitch(R_rel)
         pose[POS_SL] = pos_rel
         pose[ROT_SL] = R_rel.reshape(-1)
 

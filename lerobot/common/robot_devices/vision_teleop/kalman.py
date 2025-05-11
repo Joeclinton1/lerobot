@@ -4,7 +4,7 @@ import numpy as np
 
 
 class KalmanXYZ:
-    def __init__(self, dt=1/30, q=1e-2, r=5e-3):
+    def __init__(self, dt=1/30, q=5e-3, r=5e-3):
         self.dt = dt
         self.x  = np.zeros(6)          # state
         self.P  = np.eye(6) * 1.       # covariance

@@ -546,7 +546,6 @@ class ManipulatorRobot:
             ee_vec = axis_motion("z", t - 10)
 
         cur = self.follower_arms["main"].read("Present_Position")
-        print(self.joint_to_ee(cur))
         return {"main": torch.from_numpy(self.ee_to_joint(ee_vec, cur))}
         
     def teleop_step(

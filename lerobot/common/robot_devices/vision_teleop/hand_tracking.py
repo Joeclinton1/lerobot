@@ -23,10 +23,10 @@ class HandTracker:
         self.hand = hand
         self.show_viz = show_viz
         self.tracking_paused = True
-        self.last_t = time.time()
         self._ema_fps = None
+        self.initial_follower_vec = None
 
-        self.pose_computer = HandPoseComputer(device=device, hand=hand, inference_interval=2)
+        self.pose_computer = HandPoseComputer(device=device, hand=hand, inference_interval=1)
         self.visualizer = HandPoseVisualizer(self.pose_computer.R_wilor_to_robot, self.pose_computer.CAM_ORIGIN)
         listener = keyboard.Listener(on_press=self.onpress, on_release=self.onrelease)
         listener.start()
@@ -53,7 +53,7 @@ class HandTracker:
     def restart_tracking(self):
         self.tracking_paused = False
         self.pose_computer.initial_pos = None
-        self.pose_computer.initial_follower_vec = None
+        self.initial_follower_vec = None
 
     # ───────────────────────── public API ───────────────────────────
     def read_hand_state(self, follower_vec13) -> Optional[np.ndarray]:
@@ -63,16 +63,20 @@ class HandTracker:
             raise RuntimeError("Camera read failed")
         frame = cv2.flip(frame, 1)
 
-        dt = 0
-        if not self.tracking_paused:
-            dt = time.time() - self.last_t
-            self.last_t = time.time()
-
         # Pose estimation (relative)
-        rel_pose = self.pose_computer.compute_pose(frame, paused=self.tracking_paused, dt=dt)
+        rel_pose = self.pose_computer.compute_pose(frame, paused=self.tracking_paused)
+
+        # 
+        # R_rel = rel_pose[ROT_SL].reshape(3,3)
+        # euler = R.from_matrix(R_rel).as_euler('zyx', degrees=False)
+        # euler[1] += np.pi  # flip pitch (middle angle in 'zyx')
+        # R_flipped = R.from_euler('zyx', euler).as_matrix()
+
 
         # Combine with follower baseline
-        result = self.pose_computer.compose_absolute_pose(rel_pose, follower_vec13)
+        if self.initial_follower_vec is None:
+            self.initial_follower_vec = follower_vec13.copy()
+        result = self.pose_computer.compose_absolute_pose(rel_pose, self.initial_follower_vec)
 
         # Optional debug visualisation
         if self.show_viz and not self.tracking_paused and self.pose_computer.last_info is not None:

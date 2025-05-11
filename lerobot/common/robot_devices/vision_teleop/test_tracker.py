@@ -5,7 +5,7 @@ import cv2
 import numpy as np
 from scipy.spatial.transform import Rotation as R  # noqa: N817
 
-from lerobot.common.robot_devices.vision_teleop.hand_pose import GRIP_ID, POS_SL, ROT_SL, rotmat_lh_to_rpy_zyx
+from lerobot.common.robot_devices.vision_teleop.hand_pose import GRIP_ID, POS_SL, ROT_SL, rotmat_to_rpy_zyx
 from lerobot.common.robot_devices.vision_teleop.hand_tracking import HandTracker
 
 DEBUG = True
@@ -43,7 +43,7 @@ def main():
             if vec13 is not None:
                 pos = vec13[POS_SL]
                 rotmat = vec13[ROT_SL].reshape(3, 3)
-                eul = np.degrees(rotmat_lh_to_rpy_zyx(rotmat))
+                eul = np.degrees(rotmat_to_rpy_zyx(rotmat))
                 grip = vec13[GRIP_ID]
                 print(f"Pos: {pos.round(2)}, Euler: {eul.round(1)}, Grip: {grip:.1f} | ", end="")
             print(f"FPS: {_ema_fps:.1f}")
