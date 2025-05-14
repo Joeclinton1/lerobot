@@ -91,24 +91,24 @@ class GripperPoseVisualizer:
         pose_applied = pose_final.copy()
         pose_applied.transform_pose(self.robot_axes_in_screen,np.array([0,0,0]))
 
-        pose_applied2 = pose_rel.copy()
-        pose_applied2.transform_pose(self.robot_axes_in_screen,np.array([0,0,0]))
+        # pose_applied2 = pose_rel.copy()
+        # pose_applied2.transform_pose(self.robot_axes_in_screen,np.array([0,0,0]))
 
       
-        pose_applied3 = pose_raw.copy()
-        pose_applied3.transform_pose(self.robot_axes_in_screen,np.array([0,0,0]))
+        # pose_applied3 = pose_raw.copy()
+        # pose_applied3.transform_pose(self.robot_axes_in_screen,np.array([0,0,0]))
 
-        rot = R.from_euler("ZYX", [90, -45, 0], degrees=True).as_matrix() # in robot world frame
-        print(pose_rel)
-        print(rot)
-        pose_applied4 = pose_base.copy()
-        pose_applied4.transform_pose(rot, np.array([0,0,0]))
-        pose_applied4_s = pose_applied4.copy()
-        pose_applied4_s.transform_pose(self.robot_axes_in_screen,np.array([0,0,0]))
+        # rot = R.from_euler("ZYX", [0, -45, 90], degrees=True).as_matrix() # in robot world frame
+        # print(pose_rel.rot)
+        # print(rot)
+        # pose_applied4 = pose_base.copy()
+        # pose_applied4.transform_pose(rot, np.array([0,0,0]))
+        # pose_applied4_s = pose_applied4.copy()
+        # pose_applied4_s.transform_pose(self.robot_axes_in_screen,np.array([0,0,0]))
 
         # draw all visualisations to frame
         self.focal_length = self.focal_ratio * frame.shape[1]
-        frame = self.draw_gripper_axes(frame, pose_screen.pos, pose_applied4_s.rot)
+        frame = self.draw_gripper_axes(frame, pose_screen.pos, pose_applied.rot)
         frame = self.draw_gripper_vectors(frame, *pose_screen._keypoints)
-        frame = self.draw_gripper_info_text(frame, pose_screen.pos, pose_applied4)
+        frame = self.draw_gripper_info_text(frame, pose_screen.pos, pose_final)
         return frame

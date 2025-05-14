@@ -111,10 +111,10 @@ class GripperPoseComputer:
 
         if self.initial_pose is None:
             self.initial_pose = pose.copy()
-
+        
         # we aim to find the pose which takes us from the initial pose to the abs_pose
         # this is equivalent to applying an inverse transform to our pose with the initial pose
-        pose.inverse_transform_pose(self.initial_pose.rot, self.initial_pose.pos)
+        pose.pose_from_initial_to_current(self.initial_pose.rot, self.initial_pose.pos)
         return pose
 
     def _compute_gripper_pose(self, kp: TrackedHandKeypoints) -> GripperPose:

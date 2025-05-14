@@ -91,3 +91,9 @@ class GripperPose:
     def revert_basis(self, R, t):
         """Revert a previously-applied change of coordinate frame (basis)."""
         self._apply_op(lambda p: R @ p + t, lambda r: R @ r @ R.T)
+
+    def pose_from_initial_to_current(self, R, t):
+         self._apply_op(lambda p: p - t, lambda r: r @ R.T )
+
+
+    

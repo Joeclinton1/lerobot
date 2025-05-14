@@ -15,7 +15,7 @@ def main(quiet=False):
 
     # Define follower rest pose
     follower_pos = np.array([0.2, 0, 0.1])
-    follower_rot = R.from_euler("ZYX", [0, 45, 0], degrees=True).as_matrix() # in robot world frame
+    follower_rot = R.from_euler("ZYX", [0, 45, -90], degrees=True).as_matrix() # in robot world frame
     follower_vec13 = GripperPose(follower_pos, follower_rot, open_degree=5)
 
     alpha = 0.1
