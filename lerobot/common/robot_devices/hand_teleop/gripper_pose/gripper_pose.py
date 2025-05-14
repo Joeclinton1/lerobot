@@ -81,8 +81,10 @@ class GripperPose:
         self._apply_op(lambda p: p + t, lambda r: R @ r)
 
     def inverse_transform_pose(self, R, t): 
-        """Undo an active transform defined by rotation R and translation t."""
-        self._apply_op(lambda p: p - t, lambda r: R.T @ r)
+        """Undo an active transform defined by rotation R and translation t.
+        Equivalently this gives the transformation to go from initial to the current one.
+        """
+        self._apply_op(lambda p: p - t, lambda r: r @ R.T )
 
     def change_basis(self, R, t):
         """Express the pose and keypoints in a new coordinate frame defined by (R, t)."""
@@ -91,9 +93,7 @@ class GripperPose:
     def revert_basis(self, R, t):
         """Revert a previously-applied change of coordinate frame (basis)."""
         self._apply_op(lambda p: R @ p + t, lambda r: R @ r @ R.T)
-
-    def pose_from_initial_to_current(self, R, t):
-         self._apply_op(lambda p: p - t, lambda r: r @ R.T )
+         
 
 
     
