@@ -99,18 +99,11 @@ def update_policy(
         # To possibly update an internal buffer (for instance an Exponential Moving Average like in TDMPC).
         policy.update()
 
-    # pack both scalars into one tiny tensor
-    stats_gpu = torch.stack([loss.detach(), grad_norm.detach()])
-
-    # 1 sync to host
-    stats_cpu = stats_gpu.to("cpu", non_blocking=True)
-    loss_val, grad_norm_val = stats_cpu.tolist()
-
-    train_metrics.loss = loss_val
-    train_metrics.grad_norm = grad_norm_val
+    # Only light bookkeeping here – no host syncs
     train_metrics.lr = optimizer.param_groups[0]["lr"]
     train_metrics.update_s = time.perf_counter() - start_time
-    return train_metrics, output_dict
+
+    return loss.detach(), grad_norm.detach(), output_dict
 
 
 @parser.wrap()
@@ -222,7 +215,7 @@ def train(cfg: TrainPipelineConfig):
                 if isinstance(batch[key], torch.Tensor):
                     batch[key] = batch[key].to(device, non_blocking=True)
 
-            train_tracker, output_dict = update_policy(
+            loss_gpu, grad_norm_gpu, output_dict = update_policy(
                 train_tracker,
                 policy,
                 batch,
@@ -242,6 +235,9 @@ def train(cfg: TrainPipelineConfig):
             is_eval_step = cfg.eval_freq > 0 and step % cfg.eval_freq == 0
 
             if is_log_step:
+                train_tracker.loss = loss_gpu.item()
+                train_tracker.grad_norm = grad_norm_gpu.item()
+
                 logging.info(train_tracker)
                 if wandb_logger:
                     wandb_log_dict = train_tracker.to_dict()
