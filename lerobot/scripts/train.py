@@ -23,7 +23,6 @@ import torch
 from termcolor import colored
 from torch.amp import GradScaler
 from torch.optim import Optimizer
-from torch.profiler import ProfilerActivity, profile
 
 from lerobot.common.datasets.factory import make_dataset
 from lerobot.common.datasets.sampler import EpisodeAwareSampler
@@ -201,100 +200,94 @@ def train(cfg: TrainPipelineConfig):
     )
 
     logging.info("Start offline training on a fixed dataset")
-    with profile(
-        activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-        record_shapes=True,
-        with_stack=True,
-    ) as prof:
-        for _ in range(20):
-            start_time = time.perf_counter()
-            batch = next(dl_iter)
-            train_tracker.dataloading_s = time.perf_counter() - start_time
+    for _ in range(step, cfg.steps):
+        start_time = time.perf_counter()
+        batch = next(dl_iter)
+        train_tracker.dataloading_s = time.perf_counter() - start_time
 
-            for key in batch:
-                if isinstance(batch[key], torch.Tensor):
-                    batch[key] = batch[key].to(device, non_blocking=True)
+        for key in batch:
+            if isinstance(batch[key], torch.Tensor):
+                batch[key] = batch[key].to(device, non_blocking=True)
 
-            loss_gpu, grad_norm_gpu, output_dict = update_policy(
-                train_tracker,
-                policy,
-                batch,
-                optimizer,
-                cfg.optimizer.grad_clip_norm,
-                grad_scaler=grad_scaler,
-                lr_scheduler=lr_scheduler,
-                use_amp=cfg.policy.use_amp,
-            )
+        loss_gpu, grad_norm_gpu, output_dict = update_policy(
+            train_tracker,
+            policy,
+            batch,
+            optimizer,
+            cfg.optimizer.grad_clip_norm,
+            grad_scaler=grad_scaler,
+            lr_scheduler=lr_scheduler,
+            use_amp=cfg.policy.use_amp,
+        )
 
-            # Note: eval and checkpoint happens *after* the `step`th training update has completed, so we
-            # increment `step` here.
-            step += 1
-            train_tracker.step()
-            is_log_step = cfg.log_freq > 0 and step % cfg.log_freq == 0
-            is_saving_step = step % cfg.save_freq == 0 or step == cfg.steps
-            is_eval_step = cfg.eval_freq > 0 and step % cfg.eval_freq == 0
+        # Note: eval and checkpoint happens *after* the `step`th training update has completed, so we
+        # increment `step` here.
+        step += 1
+        train_tracker.step()
+        is_log_step = cfg.log_freq > 0 and step % cfg.log_freq == 0
+        is_saving_step = step % cfg.save_freq == 0 or step == cfg.steps
+        is_eval_step = cfg.eval_freq > 0 and step % cfg.eval_freq == 0
 
-            if is_log_step:
-                train_tracker.loss = loss_gpu.item()
-                train_tracker.grad_norm = grad_norm_gpu.item()
+        if is_log_step:
+            train_tracker.loss = loss_gpu.item()
+            train_tracker.grad_norm = grad_norm_gpu.item()
 
-                logging.info(train_tracker)
-                if wandb_logger:
-                    wandb_log_dict = train_tracker.to_dict()
-                    if output_dict:
-                        loggable_output_dict = {
-                            k: v.item() if isinstance(v, torch.Tensor) and v.numel() == 1 else v
-                            for k, v in output_dict.items()
-                        }
-                        wandb_log_dict.update(loggable_output_dict)
-                    wandb_logger.log_dict(wandb_log_dict, step)
-                train_tracker.reset_averages()
+            logging.info(train_tracker)
+            if wandb_logger:
+                wandb_log_dict = train_tracker.to_dict()
+                if output_dict:
+                    loggable_output_dict = {
+                        k: v.item() if isinstance(v, torch.Tensor) and v.numel() == 1 else v
+                        for k, v in output_dict.items()
+                    }
+                    wandb_log_dict.update(loggable_output_dict)
+                wandb_logger.log_dict(wandb_log_dict, step)
+            train_tracker.reset_averages()
 
-            if cfg.save_checkpoint and is_saving_step:
-                logging.info(f"Checkpoint policy after step {step}")
-                checkpoint_dir = get_step_checkpoint_dir(cfg.output_dir, cfg.steps, step)
-                save_checkpoint(checkpoint_dir, step, cfg, policy, optimizer, lr_scheduler)
-                update_last_checkpoint(checkpoint_dir)
-                if wandb_logger:
-                    wandb_logger.log_policy(checkpoint_dir)
+        if cfg.save_checkpoint and is_saving_step:
+            logging.info(f"Checkpoint policy after step {step}")
+            checkpoint_dir = get_step_checkpoint_dir(cfg.output_dir, cfg.steps, step)
+            save_checkpoint(checkpoint_dir, step, cfg, policy, optimizer, lr_scheduler)
+            update_last_checkpoint(checkpoint_dir)
+            if wandb_logger:
+                wandb_logger.log_policy(checkpoint_dir)
 
-            if cfg.env and is_eval_step:
-                step_id = get_step_identifier(step, cfg.steps)
-                logging.info(f"Eval policy at step {step}")
-                with (
-                    torch.no_grad(),
-                    torch.autocast(device_type=device.type) if cfg.policy.use_amp else nullcontext(),
-                ):
-                    eval_info = eval_policy(
-                        eval_env,
-                        policy,
-                        cfg.eval.n_episodes,
-                        videos_dir=cfg.output_dir / "eval" / f"videos_step_{step_id}",
-                        max_episodes_rendered=4,
-                        start_seed=cfg.seed,
-                    )
-
-                eval_metrics = {
-                    "avg_sum_reward": AverageMeter("∑rwrd", ":.3f"),
-                    "pc_success": AverageMeter("success", ":.1f"),
-                    "eval_s": AverageMeter("eval_s", ":.3f"),
-                }
-                eval_tracker = MetricsTracker(
-                    cfg.batch_size, dataset.num_frames, dataset.num_episodes, eval_metrics, initial_step=step
+        if cfg.env and is_eval_step:
+            step_id = get_step_identifier(step, cfg.steps)
+            logging.info(f"Eval policy at step {step}")
+            with (
+                torch.no_grad(),
+                torch.autocast(device_type=device.type) if cfg.policy.use_amp else nullcontext(),
+            ):
+                eval_info = eval_policy(
+                    eval_env,
+                    policy,
+                    cfg.eval.n_episodes,
+                    videos_dir=cfg.output_dir / "eval" / f"videos_step_{step_id}",
+                    max_episodes_rendered=4,
+                    start_seed=cfg.seed,
                 )
-                eval_tracker.eval_s = eval_info["aggregated"].pop("eval_s")
-                eval_tracker.avg_sum_reward = eval_info["aggregated"].pop("avg_sum_reward")
-                eval_tracker.pc_success = eval_info["aggregated"].pop("pc_success")
-                logging.info(eval_tracker)
-                if wandb_logger:
-                    wandb_log_dict = {**eval_tracker.to_dict(), **eval_info}
-                    wandb_logger.log_dict(wandb_log_dict, step, mode="eval")
-                    wandb_logger.log_video(eval_info["video_paths"][0], step, mode="eval")
 
-        if eval_env:
-            eval_env.close()
-        logging.info("End of training")
-    prof.export_chrome_trace("trace.json")
+            eval_metrics = {
+                "avg_sum_reward": AverageMeter("∑rwrd", ":.3f"),
+                "pc_success": AverageMeter("success", ":.1f"),
+                "eval_s": AverageMeter("eval_s", ":.3f"),
+            }
+            eval_tracker = MetricsTracker(
+                cfg.batch_size, dataset.num_frames, dataset.num_episodes, eval_metrics, initial_step=step
+            )
+            eval_tracker.eval_s = eval_info["aggregated"].pop("eval_s")
+            eval_tracker.avg_sum_reward = eval_info["aggregated"].pop("avg_sum_reward")
+            eval_tracker.pc_success = eval_info["aggregated"].pop("pc_success")
+            logging.info(eval_tracker)
+            if wandb_logger:
+                wandb_log_dict = {**eval_tracker.to_dict(), **eval_info}
+                wandb_logger.log_dict(wandb_log_dict, step, mode="eval")
+                wandb_logger.log_video(eval_info["video_paths"][0], step, mode="eval")
+
+    if eval_env:
+        eval_env.close()
+    logging.info("End of training")
 
 
 if __name__ == "__main__":
