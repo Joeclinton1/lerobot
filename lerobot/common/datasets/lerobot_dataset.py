@@ -58,6 +58,7 @@ from lerobot.common.datasets.utils import (
     load_info,
     load_stats,
     load_tasks,
+    translate_episode_index_to_position,
     validate_episode_buffer,
     validate_frame,
     write_episode,
@@ -579,7 +580,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         self.pull_from_repo(allow_patterns=files, ignore_patterns=ignore_patterns)
 
     def get_episodes_file_paths(self) -> list[Path]:
-        episodes = self.episodes if self.episodes is not None else list(range(self.meta.total_episodes))
+        episodes = self.episodes if self.episodes is not None else list(self.meta.episodes)
         fpaths = [str(self.meta.get_data_file_path(ep_idx)) for ep_idx in episodes]
         if len(self.meta.video_keys) > 0:
             video_files = [
@@ -641,8 +642,9 @@ class LeRobotDataset(torch.utils.data.Dataset):
             return get_hf_features_from_features(self.features)
 
     def _get_query_indices(self, idx: int, ep_idx: int) -> tuple[dict[str, list[int | bool]]]:
-        ep_start = self.episode_data_index["from"][ep_idx]
-        ep_end = self.episode_data_index["to"][ep_idx]
+        index_position = translate_episode_index_to_position(self.meta.episodes, ep_idx)
+        ep_start = self.episode_data_index["from"][index_position]
+        ep_end = self.episode_data_index["to"][index_position]
         query_indices = {
             key: [max(ep_start.item(), min(ep_end.item() - 1, idx + delta)) for delta in delta_idx]
             for key, delta_idx in self.delta_indices.items()
@@ -671,24 +673,11 @@ class LeRobotDataset(torch.utils.data.Dataset):
         return query_timestamps
 
     def _query_hf_dataset(self, query_indices: dict[str, list[int]]) -> dict:
-        # Step 1: Combine all unique indicesAdd commentMore actions
-        all_indices = sorted({idx for indices in query_indices.values() for idx in indices})
-
-        # Step 2: Select all required data at once
-        selected_dataset = self.hf_dataset.select(all_indices).to_dict()
-        selected_dataset = {key: torch.tensor(values) for key, values in selected_dataset.items()}
-
-        # Step 3: Map original indices to their positions in the selected dataset
-        index_map = {original_idx: i for i, original_idx in enumerate(all_indices)}
-
-        # Step 4: Build the result for each key
-        results = {}
-        for key, q_indices in query_indices.items():
-            if key not in self.meta.video_keys:
-                mapped_indices = [index_map[idx] for idx in q_indices]
-                results[key] = torch.stack([selected_dataset[key][i] for i in mapped_indices])
-
-        return results
+        return {
+            key: torch.stack(self.hf_dataset.select(q_idx)[key])
+            for key, q_idx in query_indices.items()
+            if key not in self.meta.video_keys
+        }
 
     def _query_videos(self, query_timestamps: dict[str, list[float]], ep_idx: int) -> dict[str, torch.Tensor]:
         """Note: When using data workers (e.g. DataLoader with num_workers>0), do not call this function
