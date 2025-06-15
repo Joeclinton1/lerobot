@@ -26,6 +26,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from hand_teleop.tracking.tracker import HandTracker
 
 from lerobot.common.robot_devices.cameras.utils import make_cameras_from_configs
 from lerobot.common.robot_devices.motors.utils import MotorsBus, make_motors_buses_from_configs
@@ -33,6 +34,12 @@ from lerobot.common.robot_devices.robots.configs import ManipulatorRobotConfig
 from lerobot.common.robot_devices.robots.utils import get_arm_id
 from lerobot.common.robot_devices.utils import RobotDeviceAlreadyConnectedError, RobotDeviceNotConnectedError
 
+SAFE_RANGE = {
+    "x": (0.1, 0.36),
+    "y": (-0.23, 0.23),
+    "z": (0.008, 0.25),
+    "g": (85, 110),
+}
 
 def ensure_safe_goal_position(
     goal_pos: torch.Tensor, present_pos: torch.Tensor, max_relative_target: float | list[float]
@@ -161,11 +168,22 @@ class ManipulatorRobot:
         self.config = config
         self.robot_type = self.config.type
         self.calibration_dir = Path(self.config.calibration_dir)
-        self.leader_arms = make_motors_buses_from_configs(self.config.leader_arms)
+        self.leader_arms = {}
+        if not self.config.hand_track_enable:
+            self.leader_arms = make_motors_buses_from_configs(self.config.leader_arms)
         self.follower_arms = make_motors_buses_from_configs(self.config.follower_arms)
         self.cameras = make_cameras_from_configs(self.config.cameras)
         self.is_connected = False
         self.logs = {}
+
+        if self.config.hand_track_enable:
+            self.hand_tracker = HandTracker(
+                cam_idx=self.config.hand_track_cam,
+                show_viz=self.config.hand_track_viz,
+                hand=self.config.hand_track_hand,
+                urdf_path=self.robot_type,
+                use_scroll=self.config.hand_track_use_scroll
+            )
 
     def get_motor_names(self, arm: dict[str, MotorsBus]) -> list:
         return [f"{arm}_{motor}" for arm, bus in arm.items() for motor in bus.motors]
@@ -184,8 +202,9 @@ class ManipulatorRobot:
 
     @property
     def motor_features(self) -> dict:
-        action_names = self.get_motor_names(self.leader_arms)
-        state_names = self.get_motor_names(self.leader_arms)
+        defining_arms = self.follower_arms if self.config.hand_track_enable else self.leader_arms
+        action_names = self.get_motor_names(defining_arms)
+        state_names = self.get_motor_names(defining_arms)
         return {
             "action": {
                 "dtype": "float32",
@@ -442,6 +461,22 @@ class ManipulatorRobot:
             self.follower_arms[name].write("Maximum_Acceleration", 254)
             self.follower_arms[name].write("Acceleration", 254)
 
+    def read_leader(self) -> dict:
+        if self.config.hand_track_enable:
+            cur = self.follower_arms["main"].read("Present_Position")
+            hand_state_as_joint = self.hand_tracker.read_hand_state_joint(base_pose_joint=cur, safe_range= SAFE_RANGE)
+            print(hand_state_as_joint)
+            return {"main": torch.from_numpy(hand_state_as_joint)}
+        else:
+            leader_pos = {}
+            for name in self.leader_arms:
+                before_lread_t = time.perf_counter()
+                leader_pos[name] = self.leader_arms[name].read("Present_Position")
+                leader_pos[name] = torch.from_numpy(leader_pos[name])
+                self.logs[f"read_leader_{name}_pos_dt_s"] = time.perf_counter() - before_lread_t
+            return leader_pos
+
+
     def teleop_step(
         self, record_data=False
     ) -> None | tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
@@ -451,12 +486,7 @@ class ManipulatorRobot:
             )
 
         # Prepare to assign the position of the leader to the follower
-        leader_pos = {}
-        for name in self.leader_arms:
-            before_lread_t = time.perf_counter()
-            leader_pos[name] = self.leader_arms[name].read("Present_Position")
-            leader_pos[name] = torch.from_numpy(leader_pos[name])
-            self.logs[f"read_leader_{name}_pos_dt_s"] = time.perf_counter() - before_lread_t
+        leader_pos = self.read_leader()
 
         # Send goal position to the follower
         follower_goal_pos = {}

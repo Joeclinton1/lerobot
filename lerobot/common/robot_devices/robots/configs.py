@@ -14,7 +14,7 @@
 
 import abc
 from dataclasses import dataclass, field
-from typing import Sequence
+from typing import Literal, Sequence
 
 import draccus
 
@@ -56,6 +56,14 @@ class ManipulatorRobotConfig(RobotConfig):
     gripper_open_degree: float | None = None
 
     mock: bool = False
+
+    # config parameters to enable hand tracking
+    hand_track_enable: bool = False
+    hand_track_viz: bool = True
+    hand_track_cam: int = 0
+    hand_track_hand: Literal["right", "left"] = "right"
+    hand_track_use_scroll: bool = False
+
 
     def __post_init__(self):
         if self.mock:
@@ -506,7 +514,7 @@ class So100RobotConfig(ManipulatorRobotConfig):
     leader_arms: dict[str, MotorsBusConfig] = field(
         default_factory=lambda: {
             "main": FeetechMotorsBusConfig(
-                port="/dev/tty.usbmodem58760431091",
+                port="COM9",
                 motors={
                     # name: (index, model)
                     "shoulder_pan": [1, "sts3215"],
@@ -523,7 +531,7 @@ class So100RobotConfig(ManipulatorRobotConfig):
     follower_arms: dict[str, MotorsBusConfig] = field(
         default_factory=lambda: {
             "main": FeetechMotorsBusConfig(
-                port="/dev/tty.usbmodem585A0076891",
+                port="COM11",
                 motors={
                     # name: (index, model)
                     "shoulder_pan": [1, "sts3215"],
