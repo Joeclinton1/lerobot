@@ -64,6 +64,10 @@ class TrainPipelineConfig(HubMixin):
     eval: EvalConfig = field(default_factory=EvalConfig)
     wandb: WandBConfig = field(default_factory=WandBConfig)
 
+    use_torch_compile: bool = False
+    compile_mode: str = "default"  # "default" | "reduce-overhead" | "max-autotune"
+    compile_fullgraph: bool = False  # True = slightly faster but fussier
+
     def __post_init__(self):
         self.checkpoint_path = None
 

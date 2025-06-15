@@ -141,6 +141,21 @@ def train(cfg: TrainPipelineConfig):
         ds_meta=dataset.meta,
     )
 
+    # Make sure it's on the right device before compiling
+    policy.to(device)
+
+    # 🔥 optional speed-up
+    if cfg.use_torch_compile:
+        policy = torch.compile(
+            policy,
+            mode=cfg.compile_mode,  # default / reduce-overhead / max-autotune
+            fullgraph=cfg.compile_fullgraph,
+            backend="inductor",  # default backend; leave it unless you need something fancy
+        )
+        logging.info(colored("torch.compile activated ✅", "green"))
+    else:
+        logging.info("Running in eager (uncompiled) mode")
+
     logging.info("Creating optimizer and scheduler")
     optimizer, lr_scheduler = make_optimizer_and_scheduler(cfg, policy)
     grad_scaler = GradScaler(device.type, enabled=cfg.policy.use_amp)
