@@ -140,6 +140,11 @@ import time
 from dataclasses import asdict
 from pprint import pformat
 
+try:
+    import mediapipe # has to be imported above rerun!!
+except ImportError:
+    mediapipe = None
+
 import rerun as rr
 
 # from safetensors.torch import load_file, save_file

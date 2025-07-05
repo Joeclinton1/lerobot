@@ -29,7 +29,6 @@ from lerobot.common.robot_devices.motors.configs import (
     MotorsBusConfig,
 )
 
-
 @dataclass
 class RobotConfig(draccus.ChoiceRegistry, abc.ABC):
     @property
@@ -61,8 +60,11 @@ class ManipulatorRobotConfig(RobotConfig):
     hand_track_enable: bool = False
     hand_track_viz: bool = True
     hand_track_cam: int = 0
-    hand_track_hand: Literal["right", "left"] = "right"
+    hand_track_hand: str = "right"  # one of: "right", "left"
     hand_track_use_scroll: bool = False
+    hand_track_kf_q: float = 5e-4 
+    hand_track_kf_r: float = 2e-2
+    hand_track_model: str = "wilor"  # one of: "wilor", "mediapipe", "apriltag"
 
 
     def __post_init__(self):

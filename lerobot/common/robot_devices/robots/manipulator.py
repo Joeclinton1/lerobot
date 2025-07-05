@@ -175,16 +175,18 @@ class ManipulatorRobot:
         self.cameras = make_cameras_from_configs(self.config.cameras)
         self.is_connected = False
         self.logs = {}
-
         if self.config.hand_track_enable:
             self.hand_tracker = HandTracker(
+                model=self.config.hand_track_model,
                 cam_idx=self.config.hand_track_cam,
                 show_viz=self.config.hand_track_viz,
                 hand=self.config.hand_track_hand,
                 urdf_path=self.robot_type,
                 use_scroll=self.config.hand_track_use_scroll,
                 safe_range= SAFE_RANGE,
-                debug_mode=True
+                debug_mode=False,
+                kf_q=self.config.hand_track_kf_q,
+                kf_r=self.config.hand_track_kf_r,
             )
 
     def get_motor_names(self, arm: dict[str, MotorsBus]) -> list:
@@ -468,8 +470,6 @@ class ManipulatorRobot:
             before_lread_t = time.perf_counter()
             cur = self.follower_arms["main"].read("Present_Position")
             hand_state_as_joint = self.hand_tracker.read_hand_state_joint(cur)
-            print("original: ", cur)
-            print("joint: ", hand_state_as_joint)
             self.logs[f"read_leader_main_pos_dt_s"] = time.perf_counter() - before_lread_t
             return {"main": torch.from_numpy(hand_state_as_joint)}
         else:
