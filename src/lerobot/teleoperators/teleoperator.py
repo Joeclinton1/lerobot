@@ -149,9 +149,12 @@ class Teleoperator(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def get_action(self) -> dict[str, Any]:
+    def get_action(self, current_state: Any = None) -> dict[str, Any]:
         """
         Retrieve the current action from the teleoperator.
+
+        Args:
+            current_state (Any, optional): The current robot state (e.g., joint positions) if needed by the teleoperator. Default is None.
 
         Returns:
             dict[str, Any]: A flat dictionary representing the teleoperator's current actions. Its

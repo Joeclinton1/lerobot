@@ -36,6 +36,7 @@ from dataclasses import asdict, dataclass
 from pprint import pformat
 
 import draccus
+import numpy as np
 import rerun as rr
 
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig  # noqa: F401
@@ -56,6 +57,7 @@ from lerobot.teleoperators import (  # noqa: F401
     make_teleoperator_from_config,
     so100_leader,
     so101_leader,
+    handteleop
 )
 from lerobot.utils.robot_utils import busy_wait
 from lerobot.utils.utils import init_logging, move_cursor_up
@@ -81,10 +83,22 @@ def teleop_loop(
     start = time.perf_counter()
     while True:
         loop_start = time.perf_counter()
-        action = teleop.get_action()
-        if display_data:
+        # Pass current robot state to hand teleop if needed
+        if teleop.__class__.__name__ == "HandTeleop":
             observation = robot.get_observation()
-            log_rerun_data(observation, action)
+            try:
+                current_state = {k:observation[k] for k in robot.action_features}
+            except KeyError as e:
+                raise ValueError(f"Observation missing joint key {e.args[0]} needed for HandTeleop.")
+            
+            action = teleop.get_action(current_state)
+            if display_data:
+                log_rerun_data(observation, action)
+        else:
+            action = teleop.get_action()
+            if display_data:
+                observation = robot.get_observation()
+                log_rerun_data(observation, action)
 
         robot.send_action(action)
         dt_s = time.perf_counter() - loop_start
