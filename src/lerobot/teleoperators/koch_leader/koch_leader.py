@@ -90,22 +90,43 @@ class KochLeader(Teleoperator):
         for motor in self.bus.motors:
             self.bus.write("Operating_Mode", motor, OperatingMode.EXTENDED_POSITION.value)
 
-        self.bus.write("Drive_Mode", "elbow_flex", DriveMode.INVERTED.value)
-        drive_modes = {motor: 1 if motor == "elbow_flex" else 0 for motor in self.bus.motors}
+        # Set all to 0 first
+        for m in self.bus.motors:
+            self.bus.write("Drive_Mode", m, DriveMode.NON_INVERTED.value)
+
+        for m in ["wrist_roll", "wrist_flex", "shoulder_pan"]:
+            self.bus.write("Drive_Mode", m, DriveMode.INVERTED.value)
+        drive_modes = {m: DriveMode.INVERTED.value if m in {"wrist_flex", "wrist_roll", "shoulder_pan"} else 0 for m in self.bus.motors}
 
         input(f"Move {self} to the middle of its range of motion and press ENTER....")
         homing_offsets = self.bus.set_half_turn_homings()
 
-        full_turn_motors = ["shoulder_pan", "wrist_roll"]
-        unknown_range_motors = [motor for motor in self.bus.motors if motor not in full_turn_motors]
+        full_turn = ["wrist_roll"]
+        half_turn = ["shoulder_pan"]
+        unknown_range_motors = [m for m in self.bus.motors if m not in full_turn + half_turn]
+
         print(
-            f"Move all joints except {full_turn_motors} sequentially through their "
+            f"Move all joints except {full_turn + half_turn} sequentially through their "
             "entire ranges of motion.\nRecording positions. Press ENTER to stop..."
         )
+
+        # The half turn homing doesn't apply properly without doing this
+        for motor in self.bus.motors:
+            self.bus.write("Operating_Mode", motor, OperatingMode.CURRENT_POSITION.value)
+            self.bus.write("Operating_Mode", motor, OperatingMode.EXTENDED_POSITION.value)
+
         range_mins, range_maxes = self.bus.record_ranges_of_motion(unknown_range_motors)
-        for motor in full_turn_motors:
-            range_mins[motor] = 0
-            range_maxes[motor] = 4095
+        for m in full_turn:
+            range_mins[m], range_maxes[m] = 0, 4095
+
+        for m in half_turn:
+            mid, delta = 2048, 1024
+            range_mins[m], range_maxes[m] = mid - delta, mid + delta
+            
+        # clamping
+        for motor in range_mins:
+            range_mins[motor] = max(0, min(4095, range_mins[motor]))
+            range_maxes[motor] = max(0, min(4095, range_maxes[motor]))
 
         self.calibration = {}
         for motor, m in self.bus.motors.items():
@@ -140,6 +161,7 @@ class KochLeader(Teleoperator):
         self.bus.write("Operating_Mode", "gripper", OperatingMode.CURRENT_POSITION.value)
         # Set gripper's goal pos in current position mode so that we can use it as a trigger.
         self.bus.enable_torque("gripper")
+
         if self.is_calibrated:
             self.bus.write("Goal_Position", "gripper", self.config.gripper_open_pos)
 

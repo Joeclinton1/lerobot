@@ -75,7 +75,9 @@ def assert_same_address(model_ctrl_table: dict[str, dict], motor_models: list[st
             f"At least two motor models use a different bytes representation for `data_name`='{data_name}'"
             f"({list(zip(motor_models, all_bytes, strict=False))})."
         )
-
+    
+def to_signed_32bit(val: int) -> int:
+    return val - 2**32 if val >= 2**31 else val
 
 class MotorNormMode(str, Enum):
     RANGE_0_100 = "range_0_100"
@@ -744,12 +746,14 @@ class MotorsBus(abc.ABC):
             raise TypeError(motors)
 
         start_positions = self.sync_read("Present_Position", motors, normalize=False)
+        start_positions = {m: to_signed_32bit(v) for m, v in start_positions.items()} # account for underflow
         mins = start_positions.copy()
         maxes = start_positions.copy()
 
         user_pressed_enter = False
         while not user_pressed_enter:
             positions = self.sync_read("Present_Position", motors, normalize=False)
+            positions = {m: to_signed_32bit(v) for m, v in positions.items()} # account for underflow
             mins = {motor: min(positions[motor], min_) for motor, min_ in mins.items()}
             maxes = {motor: max(positions[motor], max_) for motor, max_ in maxes.items()}
 
