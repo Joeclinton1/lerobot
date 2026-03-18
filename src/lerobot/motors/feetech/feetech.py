@@ -156,6 +156,47 @@ class FeetechMotorsBus(SerialMotorsBus):
         self._assert_motors_exist()
         self._assert_same_firmware()
 
+    def _assert_motors_exist(self) -> None:
+        expected_models = {m.id: self.model_number_table[m.model] for m in self.motors.values()}
+
+        found_models = {}
+        for id_ in self.ids:
+            model_nb = self.ping(id_)
+            if model_nb is not None:
+                found_models[id_] = model_nb
+
+        missing_ids = [id_ for id_ in self.ids if id_ not in found_models]
+        wrong_models = {}
+        for id_, found in found_models.items():
+            expected = expected_models.get(id_)
+            # For a few motors (e.g. sts3095), model number can vary across revisions.
+            # A negative expected model number acts as wildcard.
+            if expected is not None and expected >= 0 and expected != found:
+                wrong_models[id_] = (expected, found)
+
+        if missing_ids or wrong_models:
+            error_lines = [f"{self.__class__.__name__} motor check failed on port '{self.port}':"]
+
+            if missing_ids:
+                error_lines.append("\nMissing motor IDs:")
+                error_lines.extend(
+                    f"  - {id_} (expected model: {expected_models[id_]})" for id_ in missing_ids
+                )
+
+            if wrong_models:
+                error_lines.append("\nMotors with incorrect model numbers:")
+                error_lines.extend(
+                    f"  - {id_} ({self._id_to_name(id_)}): expected {expected}, found {found}"
+                    for id_, (expected, found) in wrong_models.items()
+                )
+
+            error_lines.append("\nFull expected motor list (id: model_number):")
+            error_lines.append(pformat(expected_models, indent=4, sort_dicts=False))
+            error_lines.append("\nFull found motor list (id: model_number):")
+            error_lines.append(pformat(found_models, indent=4, sort_dicts=False))
+
+            raise RuntimeError("\n".join(error_lines))
+
     def _find_single_motor(self, motor: str, initial_baudrate: int | None = None) -> tuple[int, int]:
         if self.protocol_version == 0:
             return self._find_single_motor_p0(motor, initial_baudrate)
@@ -174,7 +215,7 @@ class FeetechMotorsBus(SerialMotorsBus):
             id_model = self.broadcast_ping()
             if id_model:
                 found_id, found_model = next(iter(id_model.items()))
-                if found_model != expected_model_nb:
+                if expected_model_nb >= 0 and found_model != expected_model_nb:
                     raise RuntimeError(
                         f"Found one motor on {baudrate=} with id={found_id} but it has a "
                         f"model number '{found_model}' different than the one expected: '{expected_model_nb}'. "
@@ -196,7 +237,7 @@ class FeetechMotorsBus(SerialMotorsBus):
             for id_ in range(scs.MAX_ID + 1):
                 found_model = self.ping(id_)
                 if found_model is not None:
-                    if found_model != expected_model_nb:
+                    if expected_model_nb >= 0 and found_model != expected_model_nb:
                         raise RuntimeError(
                             f"Found one motor on {baudrate=} with id={id_} but it has a "
                             f"model number '{found_model}' different than the one expected: '{expected_model_nb}'. "

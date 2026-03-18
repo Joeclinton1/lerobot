@@ -146,6 +146,7 @@ feetech = ["feetech-servo-sdk>=1.0.0,<2.0.0", "lerobot[pyserial-dep]", "lerobot[
 dynamixel = ["dynamixel-sdk>=3.7.31,<3.9.0", "lerobot[pyserial-dep]", "lerobot[deepdiff-dep]"]
 damiao = ["lerobot[can-dep]"]
 robstride = ["lerobot[can-dep]"]
+odrive = ["odrive>=0.6.0,<1.0.0"]
 
 # Robots
 openarms = ["lerobot[damiao]"]
