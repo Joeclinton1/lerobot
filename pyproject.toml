@@ -292,6 +292,7 @@ lerobot-imgtransform-viz="lerobot.scripts.lerobot_imgtransform_viz:main"
 lerobot-edit-dataset="lerobot.scripts.lerobot_edit_dataset:main"
 lerobot-setup-can="lerobot.scripts.lerobot_setup_can:main"
 lerobot-rollout="lerobot.scripts.lerobot_rollout:main"
+lerobot-arm-monitor="lerobot.scripts.lerobot_arms_monitor:main"
 
 # ---------------- Tool Configurations ----------------
 [tool.setuptools.package-data]
