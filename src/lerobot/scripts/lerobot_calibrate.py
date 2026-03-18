@@ -40,6 +40,7 @@ from lerobot.robots import (  # noqa: F401
     RobotConfig,
     bi_openarm_follower,
     bi_so_follower,
+    gem_follower,
     hope_jr,
     koch_follower,
     lekiwi,
@@ -56,6 +57,7 @@ from lerobot.teleoperators import (  # noqa: F401
     homunculus,
     koch_leader,
     make_teleoperator_from_config,
+    minion_arm,
     omx_leader,
     openarm_leader,
     openarm_mini,
@@ -76,8 +78,6 @@ class CalibrateConfig:
             raise ValueError("Choose either a teleop or a robot.")
 
         self.device = self.robot if self.robot else self.teleop
-
-
 @draccus.wrap()
 def calibrate(cfg: CalibrateConfig):
     init_logging()

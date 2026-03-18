@@ -74,6 +74,7 @@ from lerobot.robots import (  # noqa: F401
     bi_openarm_follower,
     bi_so_follower,
     earthrover_mini_plus,
+    gem_follower,
     hope_jr,
     koch_follower,
     make_robot_from_config,
@@ -93,6 +94,7 @@ from lerobot.teleoperators import (  # noqa: F401
     keyboard,
     koch_leader,
     make_teleoperator_from_config,
+    minion_arm,
     omx_leader,
     openarm_leader,
     openarm_mini,
@@ -104,6 +106,10 @@ from lerobot.utils.import_utils import register_third_party_plugins
 from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import init_logging, move_cursor_up
 from lerobot.utils.visualization_utils import init_rerun, log_rerun_data, shutdown_rerun
+
+# Import config modules to register supported robot and teleoperator subclasses with draccus.
+from lerobot.robots.gem_follower import config_gem_follower  # noqa: F401
+from lerobot.teleoperators.minion_arm import config_minion_arm  # noqa: F401
 
 
 @dataclass
