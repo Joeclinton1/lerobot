@@ -17,8 +17,8 @@
 from __future__ import annotations
 
 import logging
-from importlib import import_module
 from contextlib import contextmanager
+from importlib import import_module
 import re
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
@@ -34,6 +34,7 @@ else:
 from ..motors_bus import Motor, MotorCalibration, MotorsBusBase, NameOrID, Value
 
 logger = logging.getLogger(__name__)
+_MISSING = object()
 
 _LEGACY_AXIS_STATES = {
     "IDLE": "AXIS_STATE_IDLE",
@@ -215,6 +216,18 @@ class ODriveMotorsBus(MotorsBusBase):
             raise KeyError(f"ODrive has no `{axis_name}`.")
         return axis
 
+    def _read_attr_once(self, obj: Any, attr_name: str) -> Any:
+        if obj is None:
+            return _MISSING
+
+        if attr_name in getattr(obj, "__dict__", {}):
+            return getattr(obj, attr_name)
+
+        if getattr(type(obj), attr_name, _MISSING) is not _MISSING:
+            return getattr(obj, attr_name)
+
+        return _MISSING
+
     def _get_enum_value(self, enum_class_name: str, member_name: str, legacy_name: str) -> Any:
         enum_class = getattr(odrive, enum_class_name, None)
         if enum_class is not None:
@@ -282,15 +295,18 @@ class ODriveMotorsBus(MotorsBusBase):
         ]
         for obj_name, attr_name in candidates:
             obj = getattr(axis, obj_name, None)
-            if obj is not None and hasattr(obj, attr_name):
-                return float(getattr(obj, attr_name))
+            value = self._read_attr_once(obj, attr_name)
+            if value is not _MISSING:
+                return float(value)
 
         # Last resort: read back the commanded position (not actual).
         controller = getattr(axis, "controller", None)
-        if controller is not None and hasattr(controller, "pos_setpoint"):
-            return float(controller.pos_setpoint)
-        if controller is not None and hasattr(controller, "input_pos"):
-            return float(controller.input_pos)
+        pos_setpoint = self._read_attr_once(controller, "pos_setpoint")
+        if pos_setpoint is not _MISSING:
+            return float(pos_setpoint)
+        input_pos = self._read_attr_once(controller, "input_pos")
+        if input_pos is not _MISSING:
+            return float(input_pos)
 
         raise ValueError("Unable to read axis position estimate from ODrive API.")
 
@@ -302,8 +318,9 @@ class ODriveMotorsBus(MotorsBusBase):
         ]
         for obj_name, attr_name in candidates:
             obj = getattr(axis, obj_name, None)
-            if obj is not None and hasattr(obj, attr_name):
-                return float(getattr(obj, attr_name))
+            value = self._read_attr_once(obj, attr_name)
+            if value is not _MISSING:
+                return float(value)
         raise ValueError("Unable to read axis velocity estimate from ODrive API.")
 
     def _turns_to_output(self, motor: str, turns_value: float) -> float:
@@ -374,9 +391,10 @@ class ODriveMotorsBus(MotorsBusBase):
             return self._turns_to_output(motor, self._axis_velocity_turns_per_second(axis))
         if data_name == "Goal_Position":
             controller = getattr(axis, "controller", None)
-            if controller is None or not hasattr(controller, "input_pos"):
+            input_pos = self._read_attr_once(controller, "input_pos")
+            if input_pos is _MISSING:
                 raise ValueError("ODrive controller input position is unavailable.")
-            raw_output = self._turns_to_output(motor, float(controller.input_pos))
+            raw_output = self._turns_to_output(motor, float(input_pos))
             return self._calibrate_output_value(motor, raw_output)
         if data_name == "Kp":
             return self._gains[motor]["kp"]
