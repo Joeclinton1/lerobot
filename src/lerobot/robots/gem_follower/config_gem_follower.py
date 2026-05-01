@@ -44,6 +44,8 @@ class GemFollowerConfigBase:
     # Keep using degree-based interfaces for joints.
     use_degrees: bool = True
 
+    odrive_polling_hz: float | None = 30.0
+
     # Feetech IDs for the 7 downstream joints.
     # joint_2: sts3095, joint_3: sts3250, joint_4: sts3095, joint_5..gripper: sts3215
     feetech_motor_ids: dict[str, int] = field(

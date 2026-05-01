@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import logging
+import threading
 import time
 from functools import cached_property
 from types import SimpleNamespace
@@ -93,6 +94,12 @@ class GemFollower(Robot):
         self.bus = SimpleNamespace(motors={self._odrive_joint: self.odrive_bus.motors[self._odrive_joint]})
         self.bus.motors.update(self.feetech_bus.motors)
 
+        self._odrive_lock = threading.Lock()
+        self._odrive_poll_stop = threading.Event()
+        self._odrive_poll_thread: threading.Thread | None = None
+        self._odrive_cached_pos: float | None = None
+        self._odrive_pending_target: float | None = None
+
         self.cameras = make_cameras_from_configs(config.cameras)
 
     @property
@@ -153,6 +160,54 @@ class GemFollower(Robot):
         odrive_calibration = {k: v for k, v in self.calibration.items() if k == self._odrive_joint}
         return feetech_calibration, odrive_calibration
 
+    def _read_odrive_blocking(self) -> float:
+        pos = float(self.odrive_bus.read("Present_Position", self._odrive_joint))
+        with self._odrive_lock:
+            self._odrive_cached_pos = pos
+        return pos
+
+    def _start_odrive_polling(self) -> None:
+        hz = self.config.odrive_polling_hz
+        if not hz or hz <= 0 or self._odrive_poll_thread is not None:
+            return
+        self._odrive_poll_stop.clear()
+        period = 1.0 / hz
+        joint = self._odrive_joint
+
+        def _poll() -> None:
+            next_tick = time.perf_counter()
+            while not self._odrive_poll_stop.is_set():
+                try:
+                    with self._odrive_lock:
+                        target = self._odrive_pending_target
+                        self._odrive_pending_target = None
+                    if target is not None:
+                        self.odrive_bus.sync_write("Goal_Position", {joint: target})
+                    self._read_odrive_blocking()
+                except Exception:
+                    logger.exception("%s ODrive poll error", self)
+                next_tick += period
+                sleep = next_tick - time.perf_counter()
+                if sleep > 0:
+                    self._odrive_poll_stop.wait(sleep)
+                else:
+                    next_tick = time.perf_counter()
+
+        self._odrive_poll_thread = threading.Thread(target=_poll, name=f"{self.id}_odrive_poll", daemon=True)
+        self._odrive_poll_thread.start()
+
+    def _stop_odrive_polling(self) -> None:
+        self._odrive_poll_stop.set()
+        if self._odrive_poll_thread is not None:
+            self._odrive_poll_thread.join(timeout=1.0)
+            self._odrive_poll_thread = None
+
+    def _get_odrive_position(self) -> float:
+        if self._odrive_poll_thread is None or self._odrive_cached_pos is None:
+            return self._read_odrive_blocking()
+        with self._odrive_lock:
+            return self._odrive_cached_pos
+
     def _force_gripper_drive_mode(self, drive_mode: int = 1) -> None:
         if "gripper" not in self.calibration:
             return
@@ -181,6 +236,7 @@ class GemFollower(Robot):
         return adjusted_offsets
 
     def calibrate(self) -> None:
+        self._stop_odrive_polling()
         if self.calibration:
             user_input = input(
                 f"Press ENTER to use provided calibration file associated with the id {self.id}, or type 'c' and press ENTER to run calibration: "
@@ -288,6 +344,9 @@ class GemFollower(Robot):
 
         self.odrive_bus.configure_motors()
         self.odrive_bus.enable_torque()
+        self._read_odrive_blocking()
+        self._odrive_pending_target = None
+        self._start_odrive_polling()
 
     def setup_motors(self) -> None:
         for motor in reversed(self.feetech_bus.motors):
@@ -299,7 +358,7 @@ class GemFollower(Robot):
 
     def _read_joint_positions(self) -> dict[str, float]:
         positions = self.feetech_bus.sync_read("Present_Position")
-        positions[self._odrive_joint] = self.odrive_bus.read("Present_Position", self._odrive_joint)
+        positions[self._odrive_joint] = self._get_odrive_position()
         return positions
 
     @check_if_not_connected
@@ -328,7 +387,8 @@ class GemFollower(Robot):
             goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
 
         if self._odrive_joint in goal_pos:
-            self.odrive_bus.sync_write("Goal_Position", {self._odrive_joint: goal_pos[self._odrive_joint]})
+            with self._odrive_lock:
+                self._odrive_pending_target = goal_pos[self._odrive_joint]
 
         feetech_goal_pos = {k: v for k, v in goal_pos.items() if k in self.feetech_bus.motors}
         if feetech_goal_pos:
@@ -338,6 +398,7 @@ class GemFollower(Robot):
 
     @check_if_not_connected
     def disconnect(self):
+        self._stop_odrive_polling()
         self.odrive_bus.disconnect(self.config.disable_torque_on_disconnect)
         self.feetech_bus.disconnect(self.config.disable_torque_on_disconnect)
         for cam in self.cameras.values():
