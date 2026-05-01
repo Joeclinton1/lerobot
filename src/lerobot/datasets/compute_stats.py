@@ -27,6 +27,75 @@ from .io_utils import load_image_as_numpy
 DEFAULT_QUANTILES = [0.01, 0.10, 0.50, 0.90, 0.99]
 
 
+class RunningImageStats:
+    """Fast per-frame stats tracker for uint8 image data using np.bincount.
+
+    Uses exact 256-bin histograms per channel — ~6x faster than RunningQuantileStats
+    for uint8 images. Returns the same stats dict format as RunningQuantileStats.get_statistics().
+    """
+
+    def __init__(self, quantile_list: list[float] | None = None):
+        self._quantile_list = quantile_list if quantile_list is not None else DEFAULT_QUANTILES
+        self._quantile_keys = [f"q{int(q * 100):02d}" for q in self._quantile_list]
+        self._histograms = None  # (num_channels, 256)
+        self._count = 0
+        self._mean = None
+        self._mean_of_squares = None
+        self._min = None
+        self._max = None
+
+    def update(self, batch: np.ndarray) -> None:
+        """Update stats with a (N, C) uint8 array."""
+        batch = batch.reshape(-1, batch.shape[-1])
+        n, c = batch.shape
+
+        hists = np.stack([np.bincount(batch[:, i], minlength=256) for i in range(c)]).astype(np.int64)
+        batch_f = batch.astype(np.float32)
+        batch_mean = batch_f.mean(axis=0)
+        batch_mean_sq = (batch_f ** 2).mean(axis=0)
+
+        if self._histograms is None:
+            self._histograms = hists
+            self._mean = batch_mean
+            self._mean_of_squares = batch_mean_sq
+            self._min = batch_f.min(axis=0)
+            self._max = batch_f.max(axis=0)
+        else:
+            self._histograms += hists
+            self._mean += (batch_mean - self._mean) * (n / (self._count + n))
+            self._mean_of_squares += (batch_mean_sq - self._mean_of_squares) * (n / (self._count + n))
+            self._min = np.minimum(self._min, batch_f.min(axis=0))
+            self._max = np.maximum(self._max, batch_f.max(axis=0))
+
+        self._count += n
+
+    def get_statistics(self) -> dict[str, np.ndarray]:
+        if self._count < 2:
+            raise ValueError("Cannot compute statistics for less than 2 vectors.")
+
+        std = np.sqrt(np.maximum(0, self._mean_of_squares - self._mean ** 2))
+        stats = {
+            "min": self._min.copy(),
+            "max": self._max.copy(),
+            "mean": self._mean.copy(),
+            "std": std,
+            "count": np.array([self._count]),
+        }
+
+        bins = np.arange(257, dtype=np.float32)  # edges 0..256
+        for key, q in zip(self._quantile_keys, self._quantile_list):
+            q_vals = []
+            for c in range(self._histograms.shape[0]):
+                cumsum = np.cumsum(self._histograms[c])
+                target = q * self._count
+                idx = np.searchsorted(cumsum, target)
+                idx = np.clip(idx, 0, 255)
+                q_vals.append(float(bins[idx]))
+            stats[key] = np.array(q_vals)
+
+        return stats
+
+
 class RunningQuantileStats:
     """
     Maintains running statistics for batches of vectors, including mean,

@@ -613,11 +613,11 @@ class _CameraEncoderThread(threading.Thread):
         self.encoder_threads = encoder_threads
 
     def run(self) -> None:
-        from .compute_stats import RunningQuantileStats, auto_downsample_height_width
+        from .compute_stats import RunningImageStats, auto_downsample_height_width
 
         container = None
         output_stream = None
-        stats_tracker = RunningQuantileStats()
+        stats_tracker = RunningImageStats()
         frame_count = 0
 
         try:
@@ -676,7 +676,6 @@ class _CameraEncoderThread(threading.Thread):
                 # Update stats with downsampled frame (per-channel stats like compute_episode_stats)
                 img_chw = frame_data.transpose(2, 0, 1)  # HWC -> CHW
                 img_downsampled = auto_downsample_height_width(img_chw)
-                # Reshape CHW to (H*W, C) for per-channel stats
                 channels = img_downsampled.shape[0]
                 img_for_stats = img_downsampled.transpose(1, 2, 0).reshape(-1, channels)
                 stats_tracker.update(img_for_stats)
