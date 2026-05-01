@@ -37,6 +37,8 @@ class GemFollowerConfigBase:
     max_relative_target: float | dict[str, float] | None = None
 
     # Cameras attached to the follower robot.
+    # Expected camera names: "head" and "wrist".
+    # Example: --robot.cameras='{head: {type: opencv, index_or_path: 1, width: 640, height: 480, fps: 30}, wrist: {type: opencv, index_or_path: 3, width: 640, height: 480, fps: 30}}'
     cameras: dict[str, CameraConfig] = field(default_factory=dict)
 
     # Keep using degree-based interfaces for joints.
