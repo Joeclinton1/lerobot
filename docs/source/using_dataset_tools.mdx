@@ -42,6 +42,13 @@ lerobot-edit-dataset \
     --new_repo_id lerobot/pusht_after_deletion \
     --operation.type delete_episodes \
     --operation.episode_indices "[0, 2, 5]"
+
+# Use a faster hardware encoder when affected video chunks need re-encoding
+lerobot-edit-dataset \
+    --repo_id lerobot/pusht \
+    --operation.type delete_episodes \
+    --operation.episode_indices "[0, 2, 5]" \
+    --operation.vcodec h264_nvenc
 ```
 
 #### Split Dataset

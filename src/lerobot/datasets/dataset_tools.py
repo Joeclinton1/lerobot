@@ -92,6 +92,8 @@ def delete_episodes(
     episode_indices: list[int],
     output_dir: str | Path | None = None,
     repo_id: str | None = None,
+    vcodec: str = "libsvtav1",
+    pix_fmt: str = "yuv420p",
 ) -> LeRobotDataset:
     """Delete episodes from a LeRobotDataset and create a new dataset.
 
@@ -100,6 +102,8 @@ def delete_episodes(
         episode_indices: List of episode indices to delete.
         output_dir: Root directory where the edited dataset will be stored. If not specified, defaults to $HF_LEROBOT_HOME/repo_id. Equivalent to new_root in EditDatasetConfig.
         repo_id: Edited dataset identifier. Equivalent to new_repo_id in EditDatasetConfig.
+        vcodec: Codec used when a video file must be re-encoded because it contains both deleted and kept episodes.
+        pix_fmt: Pixel format used when re-encoding affected video files.
     """
     if not episode_indices:
         raise ValueError("No episodes to delete")
@@ -132,7 +136,7 @@ def delete_episodes(
 
     video_metadata = None
     if dataset.meta.video_keys:
-        video_metadata = _copy_and_reindex_videos(dataset, new_meta, episode_mapping)
+        video_metadata = _copy_and_reindex_videos(dataset, new_meta, episode_mapping, vcodec, pix_fmt)
 
     data_metadata = _copy_and_reindex_data(dataset, new_meta, episode_mapping)
 
@@ -144,6 +148,7 @@ def delete_episodes(
         image_transforms=dataset.image_transforms,
         delta_timestamps=dataset.delta_timestamps,
         tolerance_s=dataset.tolerance_s,
+        vcodec=vcodec,
     )
 
     logging.info(f"Created new dataset with {len(episodes_to_keep)} episodes")
@@ -785,7 +790,7 @@ def _copy_and_reindex_videos(
 
                 logging.info(
                     f"Re-encoding {video_key} (chunk {src_chunk_idx}, file {src_file_idx}) "
-                    f"with {len(episodes_to_keep_ranges)} episodes"
+                    f"with {len(episodes_to_keep_ranges)} episodes using codec {vcodec}"
                 )
                 _keep_episodes_from_video_with_av(
                     src_video_path,

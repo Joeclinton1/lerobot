@@ -34,6 +34,13 @@ Delete episodes 0, 2, and 5 from a dataset:
         --operation.type delete_episodes \
         --operation.episode_indices "[0, 2, 5]"
 
+Delete episodes and use NVENC when affected video chunks need re-encoding:
+    lerobot-edit-dataset \
+        --repo_id lerobot/pusht \
+        --operation.type delete_episodes \
+        --operation.episode_indices "[0, 2, 5]" \
+        --operation.vcodec h264_nvenc
+
 Delete episodes from a local dataset at a specific path:
     lerobot-edit-dataset \
         --repo_id lerobot/pusht \
@@ -218,6 +225,8 @@ class OperationConfig(draccus.ChoiceRegistry, abc.ABC):
 @dataclass
 class DeleteEpisodesConfig(OperationConfig):
     episode_indices: list[int] | None = None
+    vcodec: str = "libsvtav1"
+    pix_fmt: str = "yuv420p"
 
 
 @OperationConfig.register_subclass("split")
@@ -351,11 +360,16 @@ def handle_delete_episodes(cfg: EditDatasetConfig) -> None:
         dataset.root = dataset.root.with_name(dataset.root.name + "_old")
 
     logging.info(f"Deleting episodes {cfg.operation.episode_indices} from {cfg.repo_id}")
+    logging.info(
+        f"Using video codec {cfg.operation.vcodec} for video chunks that require re-encoding"
+    )
     new_dataset = delete_episodes(
         dataset,
         episode_indices=cfg.operation.episode_indices,
         output_dir=output_dir,
         repo_id=output_repo_id,
+        vcodec=cfg.operation.vcodec,
+        pix_fmt=cfg.operation.pix_fmt,
     )
 
     logging.info(f"Dataset saved to {output_dir}")

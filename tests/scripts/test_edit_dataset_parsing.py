@@ -89,3 +89,24 @@ class TestOperationTypeParsing:
         )
         resolved_name = OperationConfig.get_choice_name(type(cfg.operation))
         assert resolved_name == type_name
+
+    def test_delete_episodes_parses_video_encoding_options(self):
+        cfg = parse_cfg(
+            [
+                "--repo_id",
+                "test/repo",
+                "--operation.type",
+                "delete_episodes",
+                "--operation.episode_indices",
+                "[1, 3]",
+                "--operation.vcodec",
+                "h264",
+                "--operation.pix_fmt",
+                "yuv420p",
+            ]
+        )
+
+        assert isinstance(cfg.operation, DeleteEpisodesConfig)
+        assert cfg.operation.episode_indices == [1, 3]
+        assert cfg.operation.vcodec == "h264"
+        assert cfg.operation.pix_fmt == "yuv420p"
