@@ -181,11 +181,12 @@ class OpenCVCamera(Camera):
     @check_if_not_connected
     def _configure_capture_settings(self) -> None:
         """
-        Applies the specified FOURCC, FPS, width, and height settings to the connected camera.
+        Applies the specified FPS, width, height, and FOURCC settings to the connected camera.
 
         This method attempts to set the camera properties via OpenCV. It checks if
         the camera successfully applied the settings and raises an error if not.
-        FOURCC is set first (if specified) as it can affect the available FPS and resolution options.
+        FOURCC is set last because some Windows DirectShow drivers silently reset it
+        when FPS or frame size is applied afterward.
 
         Args:
             fourcc: The desired FOURCC code (e.g., "MJPG", "YUYV"). If None, auto-detect.
@@ -199,9 +200,6 @@ class OpenCVCamera(Camera):
             DeviceNotConnectedError: If the camera is not connected.
         """
 
-        # Set FOURCC first (if specified) as it can affect available FPS/resolution options
-        if self.config.fourcc is not None:
-            self._validate_fourcc()
         if self.videocapture is None:
             raise DeviceNotConnectedError(f"{self} videocapture is not initialized")
 
@@ -221,6 +219,9 @@ class OpenCVCamera(Camera):
             self.fps = self.videocapture.get(cv2.CAP_PROP_FPS)
         else:
             self._validate_fps()
+
+        if self.config.fourcc is not None:
+            self._validate_fourcc()
 
     def _validate_fps(self) -> None:
         """Validates and sets the camera's frames per second (FPS)."""
