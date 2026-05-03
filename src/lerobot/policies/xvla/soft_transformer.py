@@ -24,13 +24,14 @@ from typing import Final
 import torch
 import torch.nn as nn
 import torch.nn.functional as functional
+import torch.utils.checkpoint as checkpoint
 
 # ------------------------------- Small utils ----------------------------------
 
 
 def _to_2tuple(x) -> tuple:
     """Minimal replacement for timm.layers.to_2tuple."""
-    if isinstance(x, Iterable) and not isinstance(x, (str, bytes)):
+    if isinstance(x, Iterable) and not isinstance(x, str | bytes):
         t = tuple(x)
         return (t[0], t[1]) if len(t) >= 2 else (t[0], t[0])
     return (x, x)
@@ -310,6 +311,7 @@ class SoftPromptedTransformer(nn.Module):
         len_soft_prompts: int = 32,
         max_len_seq: int = 512,
         use_hetero_proj: bool = False,
+        gradient_checkpointing: bool = False,
     ) -> None:
         super().__init__()
         self.hidden_size = hidden_size
@@ -317,6 +319,7 @@ class SoftPromptedTransformer(nn.Module):
         self.dim_time = dim_time
         self.len_soft_prompts = len_soft_prompts
         self.use_hetero_proj = use_hetero_proj
+        self.gradient_checkpointing = gradient_checkpointing
 
         self.blocks = nn.ModuleList(
             [TransformerBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)]
@@ -409,7 +412,10 @@ class SoftPromptedTransformer(nn.Module):
 
         # Transformer backbone
         for block in self.blocks:
-            x = block(x)
+            if self.gradient_checkpointing and self.training and x.requires_grad:
+                x = checkpoint.checkpoint(block, x, use_reentrant=False)
+            else:
+                x = block(x)
 
         # Decode only the action segment
         return self.action_decoder(self.norm(x[:, :num_actions]), domain_id)

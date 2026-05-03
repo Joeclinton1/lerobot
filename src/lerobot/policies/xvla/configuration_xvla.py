@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -49,7 +50,7 @@ class XVLAConfig(PreTrainedConfig):
     n_obs_steps: int = 1
     chunk_size: int = 32
     n_action_steps: int = 32
-    dtype: str = "float32"  # Options: "bfloat16", "float32"
+    dtype: str = "float32"  # Options: "auto", "bfloat16", "float16", "float32"
 
     normalization_mapping: dict[str, NormalizationMode] = field(
         default_factory=lambda: {
@@ -76,6 +77,7 @@ class XVLAConfig(PreTrainedConfig):
     dim_time: int = 32
     max_len_seq: int = 512
     use_hetero_proj: bool = False
+    gradient_checkpointing: bool = False
 
     # Action & proprioception
     action_mode: str = "ee6d"
@@ -92,8 +94,10 @@ class XVLAConfig(PreTrainedConfig):
 
     # Freezing options for VLM components
     # By default, VLM encoders are frozen and only policy transformer + soft prompts train
+    freeze_vlm: bool = False  # Freeze all VLM weights and run VLM encoding without autograd
     freeze_vision_encoder: bool = False  # Freeze VLM vision encoder weights
     freeze_language_encoder: bool = False  # Freeze VLM language encoder weights
+    vlm_gradient_checkpointing: bool = False  # Checkpoint VLM encoders during training
     train_policy_transformer: bool = True  # Allow policy transformer to train
     train_soft_prompts: bool = True  # Allow soft prompts to train
 
@@ -122,7 +126,7 @@ class XVLAConfig(PreTrainedConfig):
             )
         if self.num_image_views is not None and self.num_image_views <= 0:
             raise ValueError("`num_image_views` must be > 0 when specified.")
-        if self.dtype not in ["bfloat16", "float32"]:
+        if self.dtype not in ["auto", "bfloat16", "float16", "float32"]:
             raise ValueError(f"Invalid dtype: {self.dtype}")
         self._florence_config_obj: Florence2Config | None = None
 
@@ -131,12 +135,15 @@ class XVLAConfig(PreTrainedConfig):
         Build (and cache) the Florence2 transformer config that should back the VLM.
         """
         if self._florence_config_obj is None:
-            config_dict = dict(self.florence_config)
+            config_dict = deepcopy(self.florence_config)
             if "vision_config" not in config_dict or config_dict["vision_config"] is None:
                 raise ValueError("vision_config is required")
 
             if "text_config" not in config_dict or config_dict["text_config"] is None:
                 raise ValueError("text_config is required")
+            if self.vlm_gradient_checkpointing:
+                config_dict["vision_config"]["enable_checkpoint"] = True
+                config_dict["text_config"]["use_cache"] = False
             self._florence_config_obj = Florence2Config(**config_dict)
         return self._florence_config_obj
 

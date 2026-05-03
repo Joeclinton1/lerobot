@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import builtins
+import contextlib
 import logging
 import os
 from collections import deque
@@ -108,18 +109,31 @@ class XVLAModel(nn.Module):
             dim_time=config.dim_time,
             max_len_seq=config.max_len_seq,
             use_hetero_proj=config.use_hetero_proj,
+            gradient_checkpointing=config.gradient_checkpointing,
         )
 
         # Apply freezing based on config
         self._apply_freezing()
+
+        # Enable activation checkpointing after module construction/freezing.
+        self._apply_gradient_checkpointing()
 
         # Apply dtype casting based on config
         self._apply_dtype()
 
     def _get_target_dtype(self) -> torch.dtype:
         """Get the target dtype based on config."""
+        if self.config.dtype == "auto":
+            device = torch.device(self.config.device)
+            if device.type == "cuda":
+                if hasattr(torch.cuda, "is_bf16_supported") and torch.cuda.is_bf16_supported():
+                    return torch.bfloat16
+                return torch.float16
+            return torch.float32
         if self.config.dtype == "bfloat16":
             return torch.bfloat16
+        if self.config.dtype == "float16":
+            return torch.float16
         return torch.float32
 
     def _apply_dtype(self) -> None:
@@ -134,6 +148,10 @@ class XVLAModel(nn.Module):
         Freeze VLM vision and language encoders based on config options.
         Keep only policy transformer and soft prompts trainable.
         """
+        if self.config.freeze_vlm:
+            for param in self.vlm.parameters():
+                param.requires_grad = False
+
         # Freeze vision encoder
         if self.config.freeze_vision_encoder and hasattr(self.vlm, "vision_tower"):
             for param in self.vlm.vision_tower.parameters():
@@ -162,6 +180,21 @@ class XVLAModel(nn.Module):
             for param in self.transformer.soft_prompt_hub.parameters():
                 param.requires_grad = False
 
+    def _apply_gradient_checkpointing(self) -> None:
+        if not self.config.vlm_gradient_checkpointing:
+            return
+        if hasattr(self.vlm, "vision_tower"):
+            self.vlm.vision_tower.enable_checkpoint = True
+        if hasattr(self.vlm, "language_model") and hasattr(
+            self.vlm.language_model, "gradient_checkpointing_enable"
+        ):
+            self.vlm.language_model.gradient_checkpointing_enable()
+
+    def _vlm_forward_context(self):
+        if self.training and any(param.requires_grad for param in self.vlm.parameters()):
+            return contextlib.nullcontext()
+        return torch.no_grad()
+
     def forward_vlm(
         self,
         input_ids: torch.LongTensor,
@@ -171,32 +204,33 @@ class XVLAModel(nn.Module):
         """
         Encode text and multi-view images via Florence2 encoder.
         """
-        batch_size, num_views = pixel_values.shape[:2]
-        flat_mask = image_mask.view(-1).to(dtype=torch.bool)
-        flat_images = pixel_values.flatten(0, 1)
-        num_valid = int(flat_mask.sum().item())
-        if num_valid == 0:
-            raise ValueError("At least one image view must be valid per batch.")
+        with self._vlm_forward_context():
+            batch_size, num_views = pixel_values.shape[:2]
+            flat_mask = image_mask.view(-1).to(dtype=torch.bool)
+            flat_images = pixel_values.flatten(0, 1)
+            num_valid = int(flat_mask.sum().item())
+            if num_valid == 0:
+                raise ValueError("At least one image view must be valid per batch.")
 
-        valid_images = flat_images[flat_mask]
-        valid_feats = self.vlm._encode_image(valid_images)
-        tokens_per_view, hidden_dim = valid_feats.shape[1:]
+            valid_images = flat_images[flat_mask]
+            valid_feats = self.vlm._encode_image(valid_images)
+            tokens_per_view, hidden_dim = valid_feats.shape[1:]
 
-        image_features = valid_feats.new_zeros((batch_size * num_views, tokens_per_view, hidden_dim))
-        image_features[flat_mask] = valid_feats
-        image_features = image_features.view(batch_size, num_views, tokens_per_view, hidden_dim)
-        inputs_embeds = self.vlm.get_input_embeddings()(input_ids)
-        merged_embeds, attention_mask = self.vlm._merge_input_ids_with_image_features(
-            image_features[:, 0],
-            inputs_embeds,
-        )
+            image_features = valid_feats.new_zeros((batch_size * num_views, tokens_per_view, hidden_dim))
+            image_features[flat_mask] = valid_feats
+            image_features = image_features.view(batch_size, num_views, tokens_per_view, hidden_dim)
+            inputs_embeds = self.vlm.get_input_embeddings()(input_ids)
+            merged_embeds, attention_mask = self.vlm._merge_input_ids_with_image_features(
+                image_features[:, 0],
+                inputs_embeds,
+            )
 
-        enc_out = self.vlm.language_model.model.encoder(
-            attention_mask=attention_mask,
-            inputs_embeds=merged_embeds,
-        )[0]
+            enc_out = self.vlm.language_model.model.encoder(
+                attention_mask=attention_mask,
+                inputs_embeds=merged_embeds,
+            )[0]
 
-        aux_visual_inputs = image_features[:, 1:].reshape(batch_size, -1, hidden_dim)
+            aux_visual_inputs = image_features[:, 1:].reshape(batch_size, -1, hidden_dim)
         return {"vlm_features": enc_out, "aux_visual_inputs": aux_visual_inputs}
 
     def forward(
@@ -236,7 +270,7 @@ class XVLAModel(nn.Module):
         )
         return self.action_space.compute_loss(pred_action, action)
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def generate_actions(
         self,
         input_ids: torch.LongTensor,
