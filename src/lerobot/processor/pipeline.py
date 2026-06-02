@@ -43,7 +43,7 @@ from typing import TYPE_CHECKING, Any, TypedDict, TypeVar, cast
 
 from huggingface_hub import hf_hub_download
 
-from lerobot.types import TransitionKey
+from lerobot.types import PolicyAction, TransitionKey
 from lerobot.utils.constants import HF_LEROBOT_HOME
 from lerobot.utils.hub import HubMixin
 
@@ -54,7 +54,7 @@ if TYPE_CHECKING:
     import torch
 
     from lerobot.configs import PipelineFeatureType, PolicyFeature
-    from lerobot.types import EnvAction, EnvTransition, PolicyAction
+    from lerobot.types import EnvAction, EnvTransition
 
 # Generic type variables for pipeline input and output.
 TInput = TypeVar("TInput")
