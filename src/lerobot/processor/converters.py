@@ -21,6 +21,7 @@ from functools import singledispatch
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
+import torch
 
 from lerobot.types import PolicyAction, TransitionKey
 from lerobot.utils.constants import ACTION, DONE, INFO, OBS_PREFIX, REWARD, TRUNCATED
@@ -28,8 +29,6 @@ from lerobot.utils.constants import ACTION, DONE, INFO, OBS_PREFIX, REWARD, TRUN
 from .types import RobotAction, RobotObservation
 
 if TYPE_CHECKING:
-    import torch
-
     from lerobot.types import EnvTransition
 
 _torch_dispatches_registered = False
