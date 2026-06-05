@@ -118,6 +118,12 @@ def _make_obs(state: torch.Tensor, timestep: int = 0, must_go: bool = False):
 # -----------------------------------------------------------------------------
 
 
+def test_xvla_is_supported_for_async_inference():
+    from lerobot.async_inference.constants import SUPPORTED_POLICIES
+
+    assert "xvla" in SUPPORTED_POLICIES
+
+
 def test_time_action_chunk(policy_server):
     """Verify that `_time_action_chunk` assigns correct timestamps and timesteps."""
     start_ts = time.time()

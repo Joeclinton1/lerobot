@@ -32,6 +32,7 @@ from lerobot.policies import (  # noqa: F401
     PI05Config,
     SmolVLAConfig,
     VQBeTConfig,
+    XVLAConfig,
 )
 from lerobot.robots.robot import Robot
 from lerobot.utils.constants import OBS_IMAGES, OBS_STATE, OBS_STR

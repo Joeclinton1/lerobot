@@ -19,12 +19,15 @@
 from __future__ import annotations
 
 import builtins
+import json
 import logging
 import os
+import tempfile
 from collections import deque
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import draccus
 import torch
 import torch.nn.functional as F  # noqa: N812
 from torch import Tensor, nn
@@ -304,6 +307,23 @@ class XVLAPolicy(PreTrainedPolicy):
         """
         return dict(filter(lambda kv: kv[1].requires_grad, self.named_parameters()))
 
+    @staticmethod
+    def _load_config_from_legacy_json(pretrained_name_or_path: str | Path) -> XVLAConfig:
+        config_file = Path(pretrained_name_or_path) / "config.json"
+        with open(config_file) as f:
+            config = json.load(f)
+        config.pop("type", None)
+
+        with tempfile.NamedTemporaryFile("w+", delete=False, suffix=".json") as f:
+            json.dump(config, f)
+            config_path = f.name
+
+        try:
+            with draccus.config_type("json"):
+                return draccus.parse(XVLAConfig, config_path, args=[])
+        finally:
+            os.unlink(config_path)
+
     def _prepare_state(self, batch: dict[str, Tensor], batch_size: int, device: torch.device) -> Tensor:
         if not self.config.use_proprio or OBS_STATE not in batch:
             return torch.zeros(batch_size, 0, device=device)
@@ -450,17 +470,22 @@ class XVLAPolicy(PreTrainedPolicy):
         # step 1: load config
         # TODO: jadechoghari, fix this
         if config is None:
-            config = PreTrainedConfig.from_pretrained(
-                pretrained_name_or_path=pretrained_name_or_path,
-                force_download=force_download,
-                resume_download=resume_download,
-                proxies=proxies,
-                token=token,
-                cache_dir=cache_dir,
-                local_files_only=local_files_only,
-                revision=revision,
-                **kwargs,
-            )
+            try:
+                config = PreTrainedConfig.from_pretrained(
+                    pretrained_name_or_path=pretrained_name_or_path,
+                    force_download=force_download,
+                    resume_download=resume_download,
+                    proxies=proxies,
+                    token=token,
+                    cache_dir=cache_dir,
+                    local_files_only=local_files_only,
+                    revision=revision,
+                    **kwargs,
+                )
+            except Exception:
+                if not Path(pretrained_name_or_path).is_dir():
+                    raise
+                config = cls._load_config_from_legacy_json(pretrained_name_or_path)
 
         model_id = str(pretrained_name_or_path)
         instance = cls(config, **kwargs)
