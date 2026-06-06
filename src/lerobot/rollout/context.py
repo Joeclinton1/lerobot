@@ -21,8 +21,10 @@ and :class:`DatasetContext` — assembled into :class:`RolloutContext`.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from threading import Event
 
 import torch
@@ -46,6 +48,7 @@ from lerobot.processor import (
 from lerobot.processor.relative_action_processor import RelativeActionsProcessorStep
 from lerobot.robots import make_robot_from_config
 from lerobot.teleoperators import Teleoperator, make_teleoperator_from_config
+from lerobot.utils.constants import POLICY_PREPROCESSOR_DEFAULT_NAME
 from lerobot.utils.feature_utils import combine_feature_dicts, hw_to_dataset_features
 
 from .configs import BaseStrategyConfig, DAggerStrategyConfig, RolloutConfig
@@ -58,6 +61,25 @@ from .inference import (
 from .robot_wrapper import ThreadSafeRobot
 
 logger = logging.getLogger(__name__)
+
+
+def _load_saved_rename_map(pretrained_path: str | Path | None) -> dict[str, str]:
+    """Load a saved policy preprocessor rename map from a local checkpoint, if present."""
+    if pretrained_path is None:
+        return {}
+
+    preprocessor_path = Path(pretrained_path) / f"{POLICY_PREPROCESSOR_DEFAULT_NAME}.json"
+    if not preprocessor_path.is_file():
+        return {}
+
+    with preprocessor_path.open() as f:
+        config = json.load(f)
+
+    for step in config.get("steps", []):
+        if step.get("registry_name") == "rename_observations_processor":
+            rename_map = step.get("config", {}).get("rename_map", {})
+            return dict(rename_map)
+    return {}
 
 
 def _resolve_action_key_order(
@@ -305,8 +327,12 @@ def build_rollout_context(
         raw_action_keys,
     )
 
-    # Validate visual features if no rename_map is active
-    rename_map = cfg.rename_map
+    # Validate visual features if no rename_map is active. Prefer an explicit CLI rename_map,
+    # but preserve rename maps saved with the policy preprocessor for local checkpoints.
+    rename_map = cfg.rename_map or _load_saved_rename_map(cfg.policy.pretrained_path)
+    if rename_map and not cfg.rename_map:
+        logger.info("Using rename_map saved with policy preprocessor: %s", rename_map)
+        cfg.rename_map = rename_map
     if not rename_map:
         expected_visuals = {
             k for k, v in policy_config.input_features.items() if v.type == FeatureType.VISUAL

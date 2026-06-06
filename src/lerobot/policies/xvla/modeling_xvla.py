@@ -25,7 +25,7 @@ import os
 import tempfile
 from collections import deque
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypedDict, Unpack
 
 import draccus
 import torch
@@ -41,6 +41,13 @@ from ..utils import populate_queues
 from .action_hub import build_action_space
 from .configuration_xvla import XVLAConfig
 from .soft_transformer import SoftPromptedTransformer
+
+
+class ActionSelectKwargs(TypedDict, total=False):
+    inference_delay: int | None
+    prev_chunk_left_over: Tensor | None
+    execution_horizon: int | None
+
 
 # Florence2 config and modeling depend on transformers
 if TYPE_CHECKING or _transformers_available:
@@ -428,7 +435,12 @@ class XVLAPolicy(PreTrainedPolicy):
         return actions
 
     @torch.no_grad()
-    def predict_action_chunk(self, batch: dict[str, Tensor], noise: Tensor | None = None) -> Tensor:  # noqa: ARG002
+    def predict_action_chunk(
+        self,
+        batch: dict[str, Tensor],
+        noise: Tensor | None = None,  # noqa: ARG002
+        **kwargs: Unpack[ActionSelectKwargs],  # noqa: ARG002
+    ) -> Tensor:
         self.eval()
         self._queues = populate_queues(self._queues, batch, exclude_keys=[ACTION])
         return self._get_action_chunk(batch)
