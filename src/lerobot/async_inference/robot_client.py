@@ -58,6 +58,7 @@ from lerobot.robots import (  # noqa: F401
     omx_follower,
     so_follower,
 )
+from lerobot.robots.gem_follower import config_gem_follower  # noqa: F401
 from lerobot.transport import (
     services_pb2,  # type: ignore
     services_pb2_grpc,  # type: ignore

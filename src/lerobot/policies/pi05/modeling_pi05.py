@@ -22,8 +22,11 @@ from collections import deque
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, TypedDict, Unpack
 
+import draccus
 import torch
 import torch.nn.functional as F  # noqa: N812
+from huggingface_hub import hf_hub_download
+from huggingface_hub.constants import CONFIG_NAME
 from torch import Tensor, nn
 
 from lerobot.utils.import_utils import _transformers_available, require_package
@@ -956,17 +959,39 @@ class PI05Policy(PreTrainedPolicy):
 
         # Use provided config if available, otherwise create default config
         if config is None:
-            config = PreTrainedConfig.from_pretrained(
-                pretrained_name_or_path=pretrained_name_or_path,
-                force_download=force_download,
-                resume_download=resume_download,
-                proxies=proxies,
-                token=token,
-                cache_dir=cache_dir,
-                local_files_only=local_files_only,
-                revision=revision,
-                **kwargs,
-            )
+            try:
+                config = PreTrainedConfig.from_pretrained(
+                    pretrained_name_or_path=pretrained_name_or_path,
+                    force_download=force_download,
+                    resume_download=resume_download,
+                    proxies=proxies,
+                    token=token,
+                    cache_dir=cache_dir,
+                    local_files_only=local_files_only,
+                    revision=revision,
+                    **kwargs,
+                )
+            except Exception as generic_config_error:
+                try:
+                    model_id = str(pretrained_name_or_path)
+                    if Path(model_id).is_dir():
+                        config_file = Path(model_id) / CONFIG_NAME
+                    else:
+                        config_file = hf_hub_download(
+                            repo_id=model_id,
+                            filename=CONFIG_NAME,
+                            revision=revision,
+                            cache_dir=cache_dir,
+                            force_download=force_download,
+                            proxies=proxies,
+                            resume_download=resume_download,
+                            token=token,
+                            local_files_only=local_files_only,
+                        )
+                    with draccus.config_type("json"):
+                        config = draccus.parse(cls.config_class, config_file, args=[])
+                except Exception as fallback_config_error:
+                    raise generic_config_error from fallback_config_error
 
         # Initialize model without loading weights
         # Check if dataset_stats were provided in kwargs

@@ -82,6 +82,8 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         # Attributes will be set by SendPolicyInstructions
         self.device = None
         self.policy_type = None
+        self.pretrained_name_or_path = None
+        self.rename_map = {}
         self.lerobot_features = None
         self.actions_per_chunk = None
         self.policy = None
@@ -141,10 +143,26 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
             f"Device: {policy_specs.device}"
         )
 
+        policy_already_loaded = (
+            self.policy is not None
+            and self.preprocessor is not None
+            and self.postprocessor is not None
+            and self.policy_type == policy_specs.policy_type
+            and self.pretrained_name_or_path == policy_specs.pretrained_name_or_path
+            and self.device == policy_specs.device
+            and self.rename_map == policy_specs.rename_map
+        )
+
         self.device = policy_specs.device
         self.policy_type = policy_specs.policy_type  # act, pi0, etc.
+        self.pretrained_name_or_path = policy_specs.pretrained_name_or_path
+        self.rename_map = policy_specs.rename_map
         self.lerobot_features = policy_specs.lerobot_features
         self.actions_per_chunk = policy_specs.actions_per_chunk
+
+        if policy_already_loaded:
+            self.logger.info("Policy already loaded; reusing existing policy instance")
+            return services_pb2.Empty()
 
         policy_class = get_policy_class(self.policy_type)
 
@@ -154,13 +172,14 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
 
         # Load preprocessor and postprocessor, overriding device to match requested device
         device_override = {"device": self.device}
+        preprocessor_overrides = {"device_processor": device_override}
+        if policy_specs.rename_map:
+            preprocessor_overrides["rename_observations_processor"] = {"rename_map": policy_specs.rename_map}
+
         self.preprocessor, self.postprocessor = make_pre_post_processors(
             self.policy.config,
             pretrained_path=policy_specs.pretrained_name_or_path,
-            preprocessor_overrides={
-                "device_processor": device_override,
-                "rename_observations_processor": {"rename_map": policy_specs.rename_map},
-            },
+            preprocessor_overrides=preprocessor_overrides,
             postprocessor_overrides={"device_processor": device_override},
         )
 
