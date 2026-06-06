@@ -63,6 +63,29 @@ from lerobot.utils.utils import (
 from .lerobot_eval import eval_policy_all
 
 
+class RandomSubsetSampler(torch.utils.data.Sampler[int]):
+    def __init__(
+        self,
+        indices: list[int] | range,
+        num_samples: int,
+        generator: torch.Generator | None = None,
+    ) -> None:
+        self.indices = list(indices)
+        self.num_samples = min(num_samples, len(self.indices))
+        self.generator = generator
+
+        if self.num_samples <= 0:
+            raise ValueError("RandomSubsetSampler requires at least one sample.")
+
+    def __iter__(self):
+        permutation = torch.randperm(len(self.indices), generator=self.generator)[: self.num_samples]
+        for idx in permutation:
+            yield self.indices[int(idx)]
+
+    def __len__(self) -> int:
+        return self.num_samples
+
+
 def update_policy(
     train_metrics: MetricsTracker,
     policy: PreTrainedPolicy,
@@ -559,6 +582,22 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
             )
         else:
             val_sampler = None
+
+        if cfg.validation_samples > 0:
+            validation_indices = list(val_sampler) if val_sampler is not None else range(len(val_dataset))
+            val_generator = torch.Generator()
+            if cfg.seed is not None:
+                val_generator.manual_seed(cfg.seed + 1)
+            val_sampler = RandomSubsetSampler(
+                validation_indices,
+                num_samples=cfg.validation_samples,
+                generator=val_generator,
+            )
+            logging.info(
+                "Using random validation subset: %d of %d frames per validation pass",
+                len(val_sampler),
+                len(validation_indices),
+            )
 
         val_dataloader = torch.utils.data.DataLoader(
             val_dataset,

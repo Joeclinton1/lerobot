@@ -39,6 +39,7 @@ class RenameObservationsProcessorStep(ObservationProcessorStep):
     """
 
     rename_map: dict[str, str] = field(default_factory=dict)
+    copy_map: dict[str, str] = field(default_factory=dict)
 
     def observation(self, observation):
         processed_obs = {}
@@ -47,11 +48,14 @@ class RenameObservationsProcessorStep(ObservationProcessorStep):
                 processed_obs[self.rename_map[key]] = value
             else:
                 processed_obs[key] = value
+        for source_key, target_key in self.copy_map.items():
+            if source_key in processed_obs:
+                processed_obs[target_key] = processed_obs[source_key]
 
         return processed_obs
 
     def get_config(self) -> dict[str, Any]:
-        return {"rename_map": self.rename_map}
+        return {"rename_map": self.rename_map, "copy_map": self.copy_map}
 
     def transform_features(
         self, features: dict[PipelineFeatureType, dict[str, PolicyFeature]]
@@ -61,9 +65,13 @@ class RenameObservationsProcessorStep(ObservationProcessorStep):
         - Keys not in `rename_map` remain unchanged.
         """
         new_features: dict[PipelineFeatureType, dict[str, PolicyFeature]] = features.copy()
-        new_features[PipelineFeatureType.OBSERVATION] = {
+        new_observation_features = {
             self.rename_map.get(k, k): v for k, v in features[PipelineFeatureType.OBSERVATION].items()
         }
+        for source_key, target_key in self.copy_map.items():
+            if source_key in new_observation_features:
+                new_observation_features[target_key] = new_observation_features[source_key]
+        new_features[PipelineFeatureType.OBSERVATION] = new_observation_features
         return new_features
 
 

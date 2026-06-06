@@ -104,6 +104,8 @@ class TrainPipelineConfig(HubMixin):
     # Fraction of dataset episodes reserved for validation loss. When > 0, the last N episodes are held
     # out before training starts and validation loss is logged every eval_freq steps.
     validation_split: float = 0.0
+    # Random validation frames to evaluate per validation pass. Set to 0 to evaluate all validation frames.
+    validation_samples: int = 0
     log_freq: int = 200
     tolerance_s: float = 1e-4
     save_checkpoint: bool = True
@@ -198,6 +200,8 @@ class TrainPipelineConfig(HubMixin):
 
         if not 0 <= self.validation_split < 1:
             raise ValueError(f"validation_split must be in [0, 1), got {self.validation_split}.")
+        if self.validation_samples < 0:
+            raise ValueError(f"validation_samples must be >= 0, got {self.validation_samples}.")
         if self.validation_split > 0 and self.dataset.streaming:
             raise ValueError("validation_split is not supported with streaming datasets.")
 
