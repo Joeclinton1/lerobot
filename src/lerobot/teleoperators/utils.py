@@ -103,6 +103,10 @@ def make_teleoperator_from_config(config: TeleoperatorConfig) -> "Teleoperator":
         from .minion_arm import MinionArm
 
         return MinionArm(config)
+    elif config.type in ("bi_minion_arm", "bi_minionarm"):
+        from .bi_minion_arm import BiMinionArm
+
+        return BiMinionArm(config)
     else:
         try:
             return cast("Teleoperator", make_device_from_device_class(config))

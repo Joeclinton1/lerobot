@@ -52,12 +52,14 @@ from lerobot.cameras.realsense import RealSenseCameraConfig  # noqa: F401
 from lerobot.robots import (  # noqa: F401
     Robot,
     RobotConfig,
+    bi_gem_follower,
     bi_so_follower,
     koch_follower,
     make_robot_from_config,
     omx_follower,
     so_follower,
 )
+from lerobot.robots.bi_gem_follower import config_bi_gem_follower  # noqa: F401
 from lerobot.robots.gem_follower import config_gem_follower  # noqa: F401
 from lerobot.transport import (
     services_pb2,  # type: ignore

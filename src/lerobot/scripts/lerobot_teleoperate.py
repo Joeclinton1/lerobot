@@ -67,6 +67,7 @@ from lerobot.processor import RobotAction, RobotObservation
 from lerobot.robots import (  # noqa: F401
     Robot,
     RobotConfig,
+    bi_gem_follower,
     bi_openarm_follower,
     bi_so_follower,
     earthrover_mini_plus,
@@ -84,6 +85,7 @@ from lerobot.robots.none_robot.config_none_robot import NoneRobotConfig
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
     TeleoperatorConfig,
+    bi_minion_arm,
     bi_openarm_leader,
     bi_so_leader,
     gamepad,
@@ -105,8 +107,10 @@ from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import init_logging, move_cursor_up
 
 # Import config modules to register supported robot and teleoperator subclasses with draccus.
+from lerobot.robots.bi_gem_follower import config_bi_gem_follower  # noqa: F401
 from lerobot.robots.gem_follower import config_gem_follower  # noqa: F401
 from lerobot.robots.none_robot import config_none_robot  # noqa: F401
+from lerobot.teleoperators.bi_minion_arm import config_bi_minion_arm  # noqa: F401
 from lerobot.teleoperators.minion_arm import config_minion_arm  # noqa: F401
 
 if TYPE_CHECKING:
