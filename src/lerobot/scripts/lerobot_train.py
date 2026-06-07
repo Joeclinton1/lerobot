@@ -499,6 +499,11 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
             **processor_kwargs,
             **postprocessor_kwargs,
         )
+        if cfg.rename_map:
+            for step in preprocessor.steps:
+                if getattr(step, "_registry_name", None) == "rename_observations_processor":
+                    step.rename_map = cfg.rename_map
+                    break
 
     if is_main_process:
         logging.info("Creating optimizer and scheduler")
