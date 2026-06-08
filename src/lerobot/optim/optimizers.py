@@ -111,6 +111,32 @@ class AdamWConfig(OptimizerConfig):
         return torch.optim.AdamW(params, **kwargs)
 
 
+@OptimizerConfig.register_subclass("bnb-adamw8bit")
+@dataclass
+class BnbAdamW8bitConfig(OptimizerConfig):
+    lr: float = 1e-3
+    betas: tuple[float, float] = (0.9, 0.999)
+    eps: float = 1e-8
+    weight_decay: float = 1e-2
+    grad_clip_norm: float = 10.0
+    paged: bool = True
+
+    def build(self, params: OptimizerParams) -> torch.optim.Optimizer:
+        try:
+            import bitsandbytes as bnb
+        except ImportError as e:
+            raise ImportError(
+                "Optimizer type 'bnb-adamw8bit' requires bitsandbytes. "
+                "Run with `uv run --with bitsandbytes ...` or install bitsandbytes in the environment."
+            ) from e
+
+        kwargs = asdict(self)
+        kwargs.pop("grad_clip_norm")
+        paged = kwargs.pop("paged")
+        optimizer_cls = bnb.optim.PagedAdamW8bit if paged else bnb.optim.AdamW8bit
+        return optimizer_cls(params, **kwargs)
+
+
 @OptimizerConfig.register_subclass("sgd")
 @dataclass
 class SGDConfig(OptimizerConfig):
@@ -304,7 +330,16 @@ def _save_single_optimizer_state(optimizer: torch.optim.Optimizer, save_dir: Pat
     """Save a single optimizer's state to disk."""
     state = optimizer.state_dict()
     param_groups = state.pop("param_groups")
-    flat_state = flatten_dict(state)
+    flat_state = {}
+    seen_storages = set()
+    for key, value in flatten_dict(state).items():
+        tensor = value if isinstance(value, torch.Tensor) else torch.as_tensor(value)
+        storage_key = (tensor.device, tensor.untyped_storage().data_ptr())
+        if storage_key in seen_storages:
+            tensor = tensor.clone()
+        else:
+            seen_storages.add(storage_key)
+        flat_state[key] = tensor
     save_file(flat_state, save_dir / OPTIMIZER_STATE)
     write_json(param_groups, save_dir / OPTIMIZER_PARAM_GROUPS)
 

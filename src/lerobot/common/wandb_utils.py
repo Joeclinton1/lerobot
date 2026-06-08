@@ -99,6 +99,7 @@ class WandBLogger:
         wandb.init(
             id=wandb_run_id,
             project=self.cfg.project,
+            group=self.cfg.group,
             entity=self.cfg.entity,
             name=self.job_name,
             notes=self.cfg.notes,

@@ -16,15 +16,33 @@ JOB_NAME="${JOB_NAME:-pi05_gem_stack_blocks_three_2cam_folding_recipe_rel30_${TI
 OUTPUT_DIR="${OUTPUT_DIR:-outputs/train/${JOB_NAME}}"
 LOG_DIR="${LOG_DIR:-outputs/train_logs}"
 LOG_FILE="${LOG_FILE:-${LOG_DIR}/${JOB_NAME}.log}"
-USE_PEFT="${USE_PEFT:-true}"
+USE_PEFT="${USE_PEFT:-false}"
 if [[ "${USE_PEFT}" == "true" ]]; then
   OPTIMIZER_LR="${OPTIMIZER_LR:-3.75e-04}"
   SCHEDULER_DECAY_LR="${SCHEDULER_DECAY_LR:-2.5e-05}"
   PEFT_ARGS=(--peft.method_type=LORA --peft.r="${PEFT_R:-64}")
+  UV_EXTRA_ARGS=()
+  OPTIMIZER_ARGS=()
 else
   OPTIMIZER_LR="${OPTIMIZER_LR:-3.75e-05}"
   SCHEDULER_DECAY_LR="${SCHEDULER_DECAY_LR:-2.5e-06}"
   PEFT_ARGS=()
+  UV_EXTRA_ARGS=(--with bitsandbytes)
+  OPTIMIZER_ARGS=(
+    --optimizer.type=bnb-adamw8bit
+    --optimizer.lr="${OPTIMIZER_LR}"
+    --optimizer.betas='[0.9, 0.95]'
+    --optimizer.eps=1e-8
+    --optimizer.weight_decay=0.01
+    --optimizer.grad_clip_norm=1.0
+    --optimizer.paged=true
+    --scheduler.type=cosine_decay_with_warmup
+    --scheduler.peak_lr="${OPTIMIZER_LR}"
+    --scheduler.decay_lr="${SCHEDULER_DECAY_LR}"
+    --scheduler.num_warmup_steps=1000
+    --scheduler.num_decay_steps=100000
+    --use_policy_training_preset=false
+  )
 fi
 
 mkdir -p "${LOG_DIR}"
@@ -36,7 +54,7 @@ if [[ ! -f "${DATASET_ROOT}/meta/stats.json" ]]; then
   exit 1
 fi
 
-exec uv run lerobot-train \
+exec uv run "${UV_EXTRA_ARGS[@]}" lerobot-train \
   --policy.path="${POLICY_PATH}" \
   --policy.device=cuda \
   --policy.dtype=bfloat16 \
@@ -52,6 +70,7 @@ exec uv run lerobot-train \
   --policy.scheduler_decay_steps=100000 \
   --policy.scheduler_decay_lr="${SCHEDULER_DECAY_LR}" \
   --policy.push_to_hub=false \
+  "${OPTIMIZER_ARGS[@]}" \
   --dataset.repo_id="${DATASET_REPO}" \
   --dataset.root="${DATASET_ROOT}" \
   --rename_map='{"observation.images.head":"observation.images.base_0_rgb","observation.images.wrist":"observation.images.left_wrist_0_rgb"}' \
@@ -60,14 +79,15 @@ exec uv run lerobot-train \
   --eval.batch_size=1 \
   --num_workers="${NUM_WORKERS:-2}" \
   --prefetch_factor=4 \
-  --log_freq=50 \
-  --eval_freq=5000 \
+  --log_freq="${LOG_FREQ:-50}" \
+  --eval_freq="${EVAL_FREQ:-5000}" \
   --validation_split=0.1 \
   --validation_samples=256 \
-  --save_checkpoint=true \
-  --save_freq=10000 \
-  --wandb.enable=true \
-  --wandb.project="${WANDB_PROJECT:-gem-stack-blocks-three-pi05-folding-recipe}" \
+  --save_checkpoint="${SAVE_CHECKPOINT:-true}" \
+  --save_freq="${SAVE_FREQ:-10000}" \
+  --wandb.enable="${WANDB_ENABLE:-true}" \
+  --wandb.project="${WANDB_PROJECT:-gem-stack-blocks}" \
+  --wandb.group="${WANDB_GROUP:-gem-stack-blocks-three-pi05-rtc}" \
   --seed=1000 \
   --job_name="${JOB_NAME}" \
   --output_dir="${OUTPUT_DIR}" \
