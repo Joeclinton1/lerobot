@@ -19,6 +19,7 @@ from .optimizers import (
     OptimizerConfig as OptimizerConfig,
     SGDConfig as SGDConfig,
     XVLAAdamWConfig as XVLAAdamWConfig,
+    XVLABnbAdamW8bitConfig as XVLABnbAdamW8bitConfig,
     load_optimizer_state,
     save_optimizer_state,
 )
@@ -43,6 +44,7 @@ __all__ = [
     "OptimizerConfig",
     "SGDConfig",
     "XVLAAdamWConfig",
+    "XVLABnbAdamW8bitConfig",
     # Scheduler configs
     "CosineDecayWithWarmupSchedulerConfig",
     "DiffuserSchedulerConfig",

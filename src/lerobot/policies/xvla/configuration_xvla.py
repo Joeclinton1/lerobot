@@ -16,13 +16,11 @@
 # limitations under the License.
 # ------------------------------------------------------------------------------
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from lerobot.configs import FeatureType, NormalizationMode, PolicyFeature, PreTrainedConfig
-from lerobot.optim import CosineDecayWithWarmupSchedulerConfig, XVLAAdamWConfig
+from lerobot.optim import CosineDecayWithWarmupSchedulerConfig, XVLAAdamWConfig, XVLABnbAdamW8bitConfig
 from lerobot.utils.constants import OBS_IMAGES
 
 # Conditional import for type checking and lazy loading
@@ -103,6 +101,8 @@ class XVLAConfig(PreTrainedConfig):
     optimizer_eps: float = 1e-8
     optimizer_weight_decay: float = 0.0
     optimizer_grad_clip_norm: float = 10.0
+    optimizer_use_bnb_8bit: bool = False
+    optimizer_bnb_paged: bool = True
     # Soft-prompt LR settings (for optional warm-up)
     optimizer_soft_prompt_lr_scale: float = 1.0  # Scale factor for soft-prompt LR
     optimizer_soft_prompt_warmup_lr_scale: float | None = None  # Start scale for warmup (e.g., 0.01)
@@ -124,9 +124,9 @@ class XVLAConfig(PreTrainedConfig):
             raise ValueError("`num_image_views` must be > 0 when specified.")
         if self.dtype not in ["bfloat16", "float32"]:
             raise ValueError(f"Invalid dtype: {self.dtype}")
-        self._florence_config_obj: Florence2Config | None = None
+        self._florence_config_obj: Any = None
 
-    def get_florence_config(self) -> Florence2Config:
+    def get_florence_config(self) -> Any:
         """
         Build (and cache) the Florence2 transformer config that should back the VLM.
         """
@@ -162,7 +162,7 @@ class XVLAConfig(PreTrainedConfig):
                         shape=(3, height, width),
                     )
 
-    def get_optimizer_preset(self) -> XVLAAdamWConfig:
+    def get_optimizer_preset(self) -> XVLAAdamWConfig | XVLABnbAdamW8bitConfig:
         """Return the XVLA-specific optimizer with differential learning rates.
 
         This optimizer applies:
@@ -170,7 +170,11 @@ class XVLAConfig(PreTrainedConfig):
         - Full LR for transformer/action head
         - Configurable LR for soft-prompts (with optional warm-up)
         """
-        return XVLAAdamWConfig(
+        optimizer_cls = XVLABnbAdamW8bitConfig if self.optimizer_use_bnb_8bit else XVLAAdamWConfig
+        kwargs = {}
+        if self.optimizer_use_bnb_8bit:
+            kwargs["paged"] = self.optimizer_bnb_paged
+        return optimizer_cls(
             lr=self.optimizer_lr,
             betas=self.optimizer_betas,
             eps=self.optimizer_eps,
@@ -178,6 +182,7 @@ class XVLAConfig(PreTrainedConfig):
             grad_clip_norm=self.optimizer_grad_clip_norm,
             soft_prompt_lr_scale=self.optimizer_soft_prompt_lr_scale,
             soft_prompt_warmup_lr_scale=self.optimizer_soft_prompt_warmup_lr_scale,
+            **kwargs,
         )
 
     def get_scheduler_preset(self) -> CosineDecayWithWarmupSchedulerConfig:

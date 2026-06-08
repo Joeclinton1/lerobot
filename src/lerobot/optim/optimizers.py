@@ -188,20 +188,7 @@ class XVLAAdamWConfig(OptimizerConfig):
     soft_prompt_lr_scale: float = 1.0  # Scale factor for soft-prompt LR (1.0 = same as base LR)
     soft_prompt_warmup_lr_scale: float | None = None  # If set, start soft-prompts at this scale (e.g., 0.01)
 
-    def build(self, params: OptimizerParams) -> torch.optim.Optimizer:
-        """
-        Build AdamW optimizer with differential learning rates.
-
-        Args:
-            params: Must be a dict[str, Parameter] from dict(model.named_parameters())
-                or equivalent.
-
-        Returns:
-            AdamW optimizer with parameter groups for VLM, soft-prompts, and other components
-
-        Raises:
-            AssertionError: If params is not a dict (e.g., from model.parameters())
-        """
+    def _build_param_groups(self, params: OptimizerParams) -> list[dict[str, Any]]:
         assert isinstance(params, dict), "Custom LR optimizer requires `named_parameters()` as inputs."
 
         vlm_group, soft_prompt_group, other_group = [], [], []
@@ -243,10 +230,50 @@ class XVLAAdamWConfig(OptimizerConfig):
         ]
 
         # Filter out empty groups
-        param_groups = [g for g in param_groups if len(g["params"]) > 0]
+        return [g for g in param_groups if len(g["params"]) > 0]
+
+    def build(self, params: OptimizerParams) -> torch.optim.Optimizer:
+        """
+        Build AdamW optimizer with differential learning rates.
+
+        Args:
+            params: Must be a dict[str, Parameter] from dict(model.named_parameters())
+                or equivalent.
+
+        Returns:
+            AdamW optimizer with parameter groups for VLM, soft-prompts, and other components
+
+        Raises:
+            AssertionError: If params is not a dict (e.g., from model.parameters())
+        """
+        param_groups = self._build_param_groups(params)
 
         return torch.optim.AdamW(
             param_groups,
+            betas=self.betas,
+            eps=self.eps,
+        )
+
+
+@OptimizerConfig.register_subclass("xvla-bnb-adamw8bit")
+@dataclass
+class XVLABnbAdamW8bitConfig(XVLAAdamWConfig):
+    """Paged 8-bit AdamW for XVLA that preserves XVLA's differential LR groups."""
+
+    paged: bool = True
+
+    def build(self, params: OptimizerParams) -> torch.optim.Optimizer:
+        try:
+            import bitsandbytes as bnb
+        except ImportError as e:
+            raise ImportError(
+                "Optimizer type 'xvla-bnb-adamw8bit' requires bitsandbytes. "
+                "Run with `uv run --with bitsandbytes ...` or install bitsandbytes in the environment."
+            ) from e
+
+        optimizer_cls = bnb.optim.PagedAdamW8bit if self.paged else bnb.optim.AdamW8bit
+        return optimizer_cls(
+            self._build_param_groups(params),
             betas=self.betas,
             eps=self.eps,
         )
