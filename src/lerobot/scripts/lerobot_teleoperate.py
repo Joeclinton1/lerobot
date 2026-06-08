@@ -55,7 +55,7 @@ lerobot-teleoperate \
 
 import logging
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pprint import pformat
 from typing import TYPE_CHECKING
 
@@ -80,6 +80,7 @@ from lerobot.robots import (  # noqa: F401
     so_follower,
     unitree_g1 as unitree_g1_robot,
 )
+from lerobot.robots.none_robot.config_none_robot import NoneRobotConfig
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
     TeleoperatorConfig,
@@ -99,11 +100,13 @@ from lerobot.teleoperators import (  # noqa: F401
     unitree_g1,
 )
 from lerobot.utils.import_utils import register_third_party_plugins
+from lerobot.utils.robot_arm_viewer import RobotArmViewer, RobotArmViewerConfig, map_action_to_gem
 from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import init_logging, move_cursor_up
 
 # Import config modules to register supported robot and teleoperator subclasses with draccus.
 from lerobot.robots.gem_follower import config_gem_follower  # noqa: F401
+from lerobot.robots.none_robot import config_none_robot  # noqa: F401
 from lerobot.teleoperators.minion_arm import config_minion_arm  # noqa: F401
 
 if TYPE_CHECKING:
@@ -126,6 +129,10 @@ class TeleoperateConfig:
     display_port: int | None = None
     # Whether to  display compressed images in Rerun
     display_compressed_images: bool = False
+    teleop_calibrate: bool = True
+    robot_calibrate: bool = True
+    # Optional robot-arm-viewer sidecar for visualizing GEM actions.
+    viewer: RobotArmViewerConfig = field(default_factory=RobotArmViewerConfig)
 
 
 def teleop_loop(
@@ -138,6 +145,7 @@ def teleop_loop(
     display_data: bool = False,
     duration: float | None = None,
     display_compressed_images: bool = False,
+    viewer: RobotArmViewer | None = None,
 ):
     """
     This function continuously reads actions from a teleoperation device, processes them through optional
@@ -156,7 +164,7 @@ def teleop_loop(
         robot_observation_processor: An optional pipeline to process raw observations from the robot.
     """
 
-    display_len = max(len(key) for key in robot.action_features)
+    display_len = max((len(key) for key in robot.action_features), default=1)
     start = time.perf_counter()
     while True:
         loop_start = time.perf_counter()
@@ -178,9 +186,13 @@ def teleop_loop(
 
         # Process action for robot through pipeline
         robot_action_to_send = robot_action_processor((teleop_action, obs))
+        if robot.name == "gem":
+            robot_action_to_send = map_action_to_gem(robot_action_to_send)
 
         # Send processed action to robot (robot_action_processor.to_output should return RobotAction)
-        _ = robot.send_action(robot_action_to_send)
+        sent_action = robot.send_action(robot_action_to_send)
+        if viewer is not None:
+            viewer.send_action(sent_action)
 
         if display_data:
             from lerobot.utils.visualization_utils import log_rerun_data
@@ -225,14 +237,20 @@ def teleoperate(cfg: TeleoperateConfig):
         else cfg.display_compressed_images
     )
 
+    if cfg.viewer.only and not cfg.viewer.enabled:
+        raise ValueError("--viewer.only=true requires --viewer.enabled=true")
+
     teleop = make_teleoperator_from_config(cfg.teleop)
-    robot = make_robot_from_config(cfg.robot)
+    robot = make_robot_from_config(NoneRobotConfig()) if cfg.viewer.only else make_robot_from_config(cfg.robot)
+    viewer = make_robot_arm_viewer(cfg.viewer, cfg.robot.type)
     from lerobot.processor import make_default_processors
 
     teleop_action_processor, robot_action_processor, robot_observation_processor = make_default_processors()
 
-    teleop.connect()
-    robot.connect()
+    teleop.connect(calibrate=cfg.teleop_calibrate)
+    robot.connect(calibrate=cfg.robot_calibrate)
+    if viewer is not None:
+        viewer.connect()
 
     try:
         teleop_loop(
@@ -245,6 +263,7 @@ def teleoperate(cfg: TeleoperateConfig):
             robot_action_processor=robot_action_processor,
             robot_observation_processor=robot_observation_processor,
             display_compressed_images=display_compressed_images,
+            viewer=viewer,
         )
     except KeyboardInterrupt:
         pass
@@ -255,6 +274,14 @@ def teleoperate(cfg: TeleoperateConfig):
             shutdown_rerun()
         teleop.disconnect()
         robot.disconnect()
+        if viewer is not None:
+            viewer.disconnect()
+
+
+def make_robot_arm_viewer(config: RobotArmViewerConfig, robot_type: str) -> RobotArmViewer | None:
+    if not config.enabled:
+        return None
+    return RobotArmViewer(config, robot_type)
 
 
 def main():

@@ -72,6 +72,10 @@ def make_robot_from_config(config: RobotConfig) -> Robot:
         from .gem_follower import GemFollower
 
         return GemFollower(config)
+    elif config.type in ("none", "no_follower"):
+        from .none_robot import NoneRobot
+
+        return NoneRobot(config)
     elif config.type == "mock_robot":
         from tests.mocks.mock_robot import MockRobot
 

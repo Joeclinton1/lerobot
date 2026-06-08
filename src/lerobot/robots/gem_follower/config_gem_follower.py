@@ -26,7 +26,7 @@ class GemFollowerConfigBase:
     """Configuration for the Gem follower arm (mixed ODrive + Feetech)."""
 
     # USB/serial port used by the Feetech chain (joint_2..joint_7 + gripper)
-    feetech_port: str
+    feetech_port: str = ""
 
     # ODrive selector. Use "auto"/"any" to pick the first found board, or set an ODrive serial number.
     odrive_port: str = "auto"

@@ -14,6 +14,8 @@
 
 import abc
 import builtins
+import json
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -165,8 +167,10 @@ class Teleoperator(abc.ABC):
             fpath (Path | None): Optional path to save the calibration file. Defaults to `self.calibration_fpath`.
         """
         fpath = self.calibration_fpath if fpath is None else fpath
-        with open(fpath, "w") as f, draccus.config_type("json"):
-            draccus.dump(self.calibration, f, indent=4)
+        calibration = {motor: asdict(values) for motor, values in self.calibration.items()}
+        with open(fpath, "w") as f:
+            json.dump(calibration, f, indent=4)
+            f.write("\n")
 
     @abc.abstractmethod
     def configure(self) -> None:
