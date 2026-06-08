@@ -37,7 +37,7 @@ class EloNeckConfig:
 class BiGemFollowerConfig(RobotConfig):
     """ELO / bimanual Gem follower: shared Feetech bus, two SteadyWin ODrive buses, optional neck."""
 
-    feetech_port: str
+    feetech_port: str = ""
     left_odrive_port: str = "auto"
     right_odrive_port: str = "auto"
     left_odrive_axis: int = 0

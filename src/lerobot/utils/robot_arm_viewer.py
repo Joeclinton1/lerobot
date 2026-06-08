@@ -39,32 +39,34 @@ class RobotArmViewerConfig:
 
 def map_action_for_viewer(action: RobotAction, robot_type: str) -> RobotAction:
     if _viewer_model_name(robot_type) == "GEM":
-        return _map_action_to_gem(action)
+        return _map_action_to_gem(action, _viewer_mode(robot_type))
     return {key: float(value) for key, value in action.items()}
 
 
-def map_action_to_gem(action: RobotAction) -> RobotAction:
-    return _map_action_to_gem(action)
+def map_action_to_gem(action: RobotAction, mode: str) -> RobotAction:
+    return _map_action_to_gem(action, mode)
 
 
-def _map_action_to_gem(action: RobotAction) -> RobotAction:
+def _map_action_to_gem(action: RobotAction, mode: str) -> RobotAction:
     mapped: RobotAction = {}
     for key, value in action.items():
         name = key.removesuffix(".pos")
-        _, joint = _split_side(name)
+        side, joint = _split_side(name)
         gem_joint = SO_TO_GEM.get(joint, joint)
         if gem_joint not in GEM_JOINTS:
             continue
-        mapped[f"{gem_joint}.pos"] = float(value)
+        out_name = f"{side}_{gem_joint}" if mode == "dual" and side else gem_joint
+        mapped[f"{out_name}.pos"] = float(value)
     return mapped
 
 
 class RobotArmViewer:
-    """Sidecar that mirrors single GEM joint actions into robot-arm-viewer."""
+    """Sidecar that mirrors GEM/ELO joint actions into robot-arm-viewer."""
 
     def __init__(self, config: RobotArmViewerConfig, robot_type: str):
         self.config = config
         self.robot_type = robot_type
+        self.mode = _viewer_mode(robot_type)
         self.model_name = _viewer_model_name(robot_type)
         self._process: subprocess.Popen | None = None
         self._connected = False
@@ -76,7 +78,7 @@ class RobotArmViewer:
         self._post(
             "configure",
             {
-                "mode": "single",
+                "mode": self.mode,
                 "robot": self.model_name,
                 "spacing_m": self.config.arm_spacing_m,
                 "leader_control": True,
@@ -155,7 +157,11 @@ def _split_side(name: str) -> tuple[str | None, str]:
     return (None, name)
 
 
+def _viewer_mode(robot_type: str) -> str:
+    return "dual" if robot_type in {"elo", "bi_gem", "bi_gem_follower", "bi_so_follower"} else "single"
+
+
 def _viewer_model_name(robot_type: str) -> str:
-    if robot_type in {"so100_follower", "so101_follower"}:
+    if robot_type in {"so100_follower", "so101_follower", "bi_so_follower"}:
         return "SO-ARM101"
     return "GEM"

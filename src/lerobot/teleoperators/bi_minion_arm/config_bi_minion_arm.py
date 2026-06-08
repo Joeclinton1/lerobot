@@ -5,13 +5,20 @@ from dataclasses import dataclass, field
 from ..config import TeleoperatorConfig
 
 
+@dataclass
+class BiMinionArmPortConfig:
+    port: str = ""
+
+
 @TeleoperatorConfig.register_subclass("bi_minion_arm")
 @TeleoperatorConfig.register_subclass("bi_minionarm")
 @dataclass
 class BiMinionArmConfig(TeleoperatorConfig):
     """Configuration for two MinionArm leaders on one shared Feetech bus."""
 
-    port: str
+    port: str = ""
+    left_arm_config: BiMinionArmPortConfig = field(default_factory=BiMinionArmPortConfig)
+    right_arm_config: BiMinionArmPortConfig = field(default_factory=BiMinionArmPortConfig)
     use_degrees: bool = True
     left_arm_motor_ids: dict[str, int] = field(
         default_factory=lambda: {

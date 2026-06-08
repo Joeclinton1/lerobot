@@ -195,32 +195,45 @@ class BiGemFollower(Robot):
         for motor in self.feetech_bus.motors:
             self.feetech_bus.write("Operating_Mode", motor, OperatingMode.POSITION.value)
 
-        input(
-            "\nCalibration: Set Zero Position\n"
-            "Position BOTH GEM arms in the usual calibration pose:\n"
-            "  - Joints 1-3 hanging downward\n"
-            "  - Joint 4 slightly bent (about 20 degrees below logical zero)\n"
-            "  - Joint 5 centered\n"
-            "  - Joint 6 pushed up to its upper limit so the hand bends upward\n"
-            "  - Both grippers closed\n"
-            "Press ENTER when ready..."
-        )
+        homing_offsets = {}
+        odrive_zero_positions = {}
+        for side, odrive_bus in (
+            ("left", self.left_odrive_bus),
+            ("right", self.right_odrive_bus),
+        ):
+            input(
+                f"\nCalibration: Set {side.upper()} GEM arm zero position\n"
+                f"Position only the {side} GEM arm in the usual calibration pose:\n"
+                "  - Joints 1-3 hanging downward\n"
+                "  - Joint 4 slightly bent (about 20 degrees below logical zero)\n"
+                "  - Joint 5 centered\n"
+                "  - Joint 6 pushed up to its upper limit so the hand bends upward\n"
+                "  - Gripper closed\n"
+                "Press ENTER when ready..."
+            )
 
-        previous_left_calibration = self.left_odrive_bus.read_calibration()
-        previous_right_calibration = self.right_odrive_bus.read_calibration()
-        self.left_odrive_bus.write_calibration({}, cache=True)
-        self.right_odrive_bus.write_calibration({}, cache=True)
-        try:
-            left_zero_pos = float(self.left_odrive_bus.read("Present_Position", "left_joint_1"))
-            right_zero_pos = float(self.right_odrive_bus.read("Present_Position", "right_joint_1"))
-        finally:
-            self.left_odrive_bus.write_calibration(previous_left_calibration, cache=True)
-            self.right_odrive_bus.write_calibration(previous_right_calibration, cache=True)
+            joint_1 = f"{side}_joint_1"
+            previous_odrive_calibration = odrive_bus.read_calibration()
+            odrive_bus.write_calibration({}, cache=True)
+            try:
+                odrive_zero_positions[joint_1] = float(odrive_bus.read("Present_Position", joint_1))
+            finally:
+                odrive_bus.write_calibration(previous_odrive_calibration, cache=True)
 
-        homing_offsets = self.feetech_bus.set_half_turn_homings()
-        homing_offsets = self._apply_captured_pose_biases(homing_offsets)
-        for motor_name, offset in homing_offsets.items():
-            self.feetech_bus.write("Homing_Offset", motor_name, offset)
+            side_motors = [f"{side}_{joint}" for joint in _ARM_JOINT_MODELS] + [f"{side}_gripper"]
+            side_offsets = self.feetech_bus.set_half_turn_homings(side_motors)
+            side_offsets = self._apply_captured_pose_biases(side_offsets)
+            for motor_name, offset in side_offsets.items():
+                self.feetech_bus.write("Homing_Offset", motor_name, offset)
+            homing_offsets.update(side_offsets)
+
+        neck_motors = [motor for motor in self.feetech_bus.motors if motor.startswith("neck_")]
+        if neck_motors:
+            input("\nCalibration: Set ELO neck neutral position and press ENTER...")
+            neck_offsets = self.feetech_bus.set_half_turn_homings(neck_motors)
+            for motor_name, offset in neck_offsets.items():
+                self.feetech_bus.write("Homing_Offset", motor_name, offset)
+            homing_offsets.update(neck_offsets)
 
         range_mins: dict[str, int] = {}
         range_maxes: dict[str, int] = {}
@@ -250,16 +263,16 @@ class BiGemFollower(Robot):
             )
 
         self.calibration["left_joint_1"] = MotorCalibration(
-            id=1,
+            id=self.left_odrive_bus.motors["left_joint_1"].id,
             drive_mode=0,
-            homing_offset=int(round(left_zero_pos)),
+            homing_offset=int(round(odrive_zero_positions["left_joint_1"])),
             range_min=-180,
             range_max=180,
         )
         self.calibration["right_joint_1"] = MotorCalibration(
-            id=9,
+            id=self.right_odrive_bus.motors["right_joint_1"].id,
             drive_mode=0,
-            homing_offset=int(round(right_zero_pos)),
+            homing_offset=int(round(odrive_zero_positions["right_joint_1"])),
             range_min=-180,
             range_max=180,
         )

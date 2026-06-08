@@ -75,6 +75,7 @@ from lerobot.robots import (  # noqa: F401
     hope_jr,
     koch_follower,
     make_robot_from_config,
+    none_robot,
     omx_follower,
     openarm_follower,
     reachy2,
@@ -135,7 +136,7 @@ class TeleoperateConfig:
     display_compressed_images: bool = False
     teleop_calibrate: bool = True
     robot_calibrate: bool = True
-    # Optional robot-arm-viewer sidecar for visualizing GEM actions.
+    # Optional robot-arm-viewer sidecar for visualizing GEM/ELO actions.
     viewer: RobotArmViewerConfig = field(default_factory=RobotArmViewerConfig)
 
 
@@ -190,8 +191,11 @@ def teleop_loop(
 
         # Process action for robot through pipeline
         robot_action_to_send = robot_action_processor((teleop_action, obs))
-        if robot.name == "gem":
-            robot_action_to_send = map_action_to_gem(robot_action_to_send)
+        if robot.name in {"gem", "elo"}:
+            robot_action_to_send = map_action_to_gem(
+                robot_action_to_send,
+                "dual" if robot.name == "elo" else "single",
+            )
 
         # Send processed action to robot (robot_action_processor.to_output should return RobotAction)
         sent_action = robot.send_action(robot_action_to_send)
