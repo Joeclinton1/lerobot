@@ -14,8 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from __future__ import annotations
-
 import json
 import math
 import os
@@ -33,6 +31,7 @@ from lerobot.optim import (
     LRSchedulerConfig,
     OptimizerConfig,
 )
+from lerobot.optim.optimizers import BnbAdamW8bitConfig
 from lerobot.utils.constants import ACTION, OBS_STATE
 
 from ..rtc.configuration_rtc import RTCConfig
@@ -204,6 +203,8 @@ class MolmoAct2Config(PreTrainedConfig):
     add_setup_tokens: bool = True
     add_control_tokens: bool = True
     normalize_gripper: bool = False
+    use_relative_actions: bool = False
+    relative_exclude_joints: list[str] = field(default_factory=list)
     num_state_tokens: int = 256
     # Leave unset for the default MolmoAct2 sequence budget inferred from the fixed
     # image/prompt/state/action token layout. Override only for unusual long prompts.
@@ -253,6 +254,8 @@ class MolmoAct2Config(PreTrainedConfig):
     optimizer_eps: float = 1e-6
     optimizer_weight_decay: float = 0.0
     optimizer_grad_clip_norm: float = 1.0
+    use_bnb_optimizer: bool = False
+    optimizer_paged: bool = True
 
     scheduler_warmup_steps: int = 200
     scheduler_decay_steps: int | None = None
@@ -381,6 +384,15 @@ class MolmoAct2Config(PreTrainedConfig):
         return None
 
     def get_optimizer_preset(self) -> OptimizerConfig:
+        if self.use_bnb_optimizer:
+            return BnbAdamW8bitConfig(
+                lr=self.optimizer_lr,
+                betas=self.optimizer_betas,
+                eps=self.optimizer_eps,
+                weight_decay=self.optimizer_weight_decay,
+                grad_clip_norm=self.optimizer_grad_clip_norm,
+                paged=self.optimizer_paged,
+            )
         return AdamWConfig(
             lr=self.optimizer_lr,
             betas=self.optimizer_betas,

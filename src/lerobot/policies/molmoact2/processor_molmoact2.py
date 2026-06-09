@@ -32,6 +32,7 @@ from torch import Tensor
 
 from lerobot.configs import FeatureType, PipelineFeatureType, PolicyFeature
 from lerobot.processor import (
+    AbsoluteActionsProcessorStep,
     AddBatchDimensionProcessorStep,
     DeviceProcessorStep,
     NormalizerProcessorStep,
@@ -39,6 +40,7 @@ from lerobot.processor import (
     PolicyProcessorPipeline,
     ProcessorStep,
     ProcessorStepRegistry,
+    RelativeActionsProcessorStep,
     RenameObservationsProcessorStep,
     UnnormalizerProcessorStep,
     policy_action_to_transition,
@@ -1028,9 +1030,16 @@ def make_molmoact2_pre_post_processors(
     )
     normalization_masks = _normalization_masks_from_stats(masked_dataset_stats)
 
+    relative_step = RelativeActionsProcessorStep(
+        enabled=config.use_relative_actions,
+        exclude_joints=config.relative_exclude_joints,
+        action_names=config.dataset_feature_names.get(ACTION),
+    )
+
     input_steps: list[ProcessorStep] = [
         RenameObservationsProcessorStep(rename_map={}),
         AddBatchDimensionProcessorStep(),
+        relative_step,
         MolmoAct2MaskedNormalizerProcessorStep(
             features={**config.input_features, **config.output_features},
             norm_map=config.normalization_mapping,
@@ -1066,6 +1075,7 @@ def make_molmoact2_pre_post_processors(
             norm_map=config.normalization_mapping,
             stats=masked_dataset_stats,
         ),
+        AbsoluteActionsProcessorStep(relative_step=relative_step),
         DeviceProcessorStep(device="cpu"),
     ]
 
