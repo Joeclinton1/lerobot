@@ -51,11 +51,12 @@ def _map_action_to_gem(action: RobotAction) -> RobotAction:
     mapped: RobotAction = {}
     for key, value in action.items():
         name = key.removesuffix(".pos")
-        _, joint = _split_side(name)
+        side, joint = _split_side(name)
         gem_joint = SO_TO_GEM.get(joint, joint)
         if gem_joint not in GEM_JOINTS:
             continue
-        mapped[f"{gem_joint}.pos"] = float(value)
+        prefix = f"{side}_" if side is not None else ""
+        mapped[f"{prefix}{gem_joint}.pos"] = float(value)
     return mapped
 
 
@@ -68,6 +69,7 @@ class RobotArmViewer:
         self.model_name = _viewer_model_name(robot_type)
         self._process: subprocess.Popen | None = None
         self._connected = False
+        self._mode = "single"
 
     def connect(self) -> None:
         if self.config.launch_viewer:
@@ -76,7 +78,7 @@ class RobotArmViewer:
         self._post(
             "configure",
             {
-                "mode": "single",
+                "mode": self._mode,
                 "robot": self.model_name,
                 "spacing_m": self.config.arm_spacing_m,
                 "leader_control": True,
@@ -92,6 +94,19 @@ class RobotArmViewer:
     def send_action(self, action: RobotAction) -> None:
         if not self._connected:
             return
+        if _is_bimanual_action(action) and self._mode != "dual":
+            self._mode = "dual"
+            self._post(
+                "configure",
+                {
+                    "mode": self._mode,
+                    "robot": self.model_name,
+                    "spacing_m": self.config.arm_spacing_m,
+                    "leader_control": True,
+                    "load_sidecar": self.model_name == "GEM",
+                    "fast_sidecar": True,
+                },
+            )
         self._post("action", {"actions": map_action_for_viewer(action, self.robot_type)})
 
     def disconnect(self) -> None:
@@ -159,3 +174,7 @@ def _viewer_model_name(robot_type: str) -> str:
     if robot_type in {"so100_follower", "so101_follower"}:
         return "SO-ARM101"
     return "GEM"
+
+
+def _is_bimanual_action(action: RobotAction) -> bool:
+    return any(key.startswith(("left_", "right_")) for key in action)

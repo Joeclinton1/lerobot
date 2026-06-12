@@ -87,6 +87,7 @@ from lerobot.teleoperators import (  # noqa: F401
     bi_openarm_leader,
     bi_so_leader,
     gamepad,
+    hand_teleop,
     homunculus,
     keyboard,
     koch_leader,
@@ -192,7 +193,7 @@ def teleop_loop(
         # Send processed action to robot (robot_action_processor.to_output should return RobotAction)
         sent_action = robot.send_action(robot_action_to_send)
         if viewer is not None:
-            viewer.send_action(sent_action)
+            viewer.send_action(raw_action if _is_bimanual_action(raw_action) else sent_action)
 
         if display_data:
             from lerobot.utils.visualization_utils import log_rerun_data
@@ -282,6 +283,10 @@ def make_robot_arm_viewer(config: RobotArmViewerConfig, robot_type: str) -> Robo
     if not config.enabled:
         return None
     return RobotArmViewer(config, robot_type)
+
+
+def _is_bimanual_action(action: RobotAction) -> bool:
+    return any(key.startswith(("left_", "right_")) for key in action)
 
 
 def main():
