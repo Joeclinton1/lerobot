@@ -151,6 +151,7 @@ odrive = ["odrive>=0.6.0,<1.0.0"]
 # Robots
 openarms = ["lerobot[damiao]"]
 gem = ["lerobot[feetech]", "lerobot[odrive]"]
+bi_gem = ["lerobot[gem]"]
 hand_teleop = ["hand-teleop[wilor] @ git+https://github.com/joeclinton1/hand-teleop.git@dual-arm-handteleop-demo"]
 gamepad = ["lerobot[pygame-dep]", "hidapi>=0.14.0,<0.15.0"]
 hopejr = ["lerobot[feetech]", "lerobot[pygame-dep]"]

@@ -61,7 +61,7 @@ def _map_action_to_gem(action: RobotAction) -> RobotAction:
 
 
 class RobotArmViewer:
-    """Sidecar that mirrors single GEM joint actions into robot-arm-viewer."""
+    """Sidecar that mirrors GEM joint actions into robot-arm-viewer."""
 
     def __init__(self, config: RobotArmViewerConfig, robot_type: str):
         self.config = config
@@ -69,7 +69,7 @@ class RobotArmViewer:
         self.model_name = _viewer_model_name(robot_type)
         self._process: subprocess.Popen | None = None
         self._connected = False
-        self._mode = "single"
+        self._mode = _viewer_mode(robot_type)
 
     def connect(self) -> None:
         if self.config.launch_viewer:
@@ -174,6 +174,10 @@ def _viewer_model_name(robot_type: str) -> str:
     if robot_type in {"so100_follower", "so101_follower"}:
         return "SO-ARM101"
     return "GEM"
+
+
+def _viewer_mode(robot_type: str) -> str:
+    return "dual" if robot_type in {"bi_gem", "bi_gem_follower", "bi_so_follower"} else "single"
 
 
 def _is_bimanual_action(action: RobotAction) -> bool:
