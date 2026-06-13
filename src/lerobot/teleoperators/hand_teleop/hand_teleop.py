@@ -157,6 +157,14 @@ class HandTeleop(Teleoperator):
         return self._default_base_joint()
 
     def _default_base_joint(self) -> np.ndarray:
+        if self.config.urdf_path.lower() in {"gem", "gem_follower", "bi_gem", "bi_gem_follower"}:
+            arm_dof = (
+                self._tracker.robot_kin.nq
+                if self._tracker is not None and self._tracker.robot_kin is not None
+                else 7
+            )
+            return np.append(np.zeros(arm_dof, dtype=np.float32), 5.0).astype(np.float32)
+
         if self._tracker is None or self._tracker.robot_kin is None:
             return np.zeros(len(self._action_names()), dtype=np.float32)
 
