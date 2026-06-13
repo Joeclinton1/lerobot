@@ -24,14 +24,6 @@ SO_ACTION_NAMES = (
     "gripper.pos",
 )
 
-SAFE_RANGE = {
-    "x": (0.13, 0.36),
-    "y": (-0.23, 0.23),
-    "z": (0.008, 0.25),
-    "g": (2, 90),
-}
-
-
 class HandTeleop(Teleoperator):
     """LeRobot teleoperator that uses hand-teleop webcam tracking as a leader arm."""
 
@@ -65,6 +57,7 @@ class HandTeleop(Teleoperator):
     @check_if_already_connected
     def connect(self, calibrate: bool = True) -> None:
         _ = calibrate
+        safe_range = self.config.safe_range
         if self.config.hand == "both":
             from hand_teleop.tracking.dual_tracker import DualHandTracker
 
@@ -76,8 +69,11 @@ class HandTeleop(Teleoperator):
                 focal_ratio=self.config.focal_ratio,
                 urdf_path=self.config.urdf_path,
                 frame_name=self.config.frame_name,
-                safe_range=SAFE_RANGE,
+                safe_range=safe_range,
+                debug_mode=self.config.debug_mode,
                 kf_dt=1 / self.config.fps,
+                kf_q=self.config.kf_q,
+                kf_r=self.config.kf_r,
                 start_paused=self.config.start_paused,
             )
             self._base_joints = {
@@ -96,9 +92,12 @@ class HandTeleop(Teleoperator):
                 focal_ratio=self.config.focal_ratio,
                 urdf_path=self.config.urdf_path,
                 frame_name=self.config.frame_name,
-                safe_range=SAFE_RANGE,
+                safe_range=safe_range,
                 use_scroll=self.config.use_scroll,
                 kf_dt=1 / self.config.fps,
+                kf_q=self.config.kf_q,
+                kf_r=self.config.kf_r,
+                debug_mode=self.config.debug_mode,
             )
             if not self.config.start_paused:
                 self._tracker._resume()

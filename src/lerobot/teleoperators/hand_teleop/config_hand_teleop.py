@@ -6,6 +6,7 @@ from typing import Literal
 from ..config import TeleoperatorConfig
 
 
+@TeleoperatorConfig.register_subclass("handteleop")
 @TeleoperatorConfig.register_subclass("hand_teleop")
 @dataclass
 class HandTeleopConfig(TeleoperatorConfig):
@@ -22,5 +23,9 @@ class HandTeleopConfig(TeleoperatorConfig):
     frame_name: str = "gripper_link"
     focal_ratio: float = 0.7
     use_scroll: bool = False
+    kf_q: float = 5e-4
+    kf_r: float = 2e-2
+    safe_range: dict[str, tuple[float, float]] | None = None
+    debug_mode: bool = False
     left_base_joint: tuple[float, float, float, float, float, float] | None = None
     right_base_joint: tuple[float, float, float, float, float, float] | None = None
