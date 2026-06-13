@@ -128,6 +128,7 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         # only running inference on the latest observation received by the server
         self.shutdown_event.set()
         self.observation_queue = Queue(maxsize=1)
+        self.last_processed_obs = None
         self._clear_rtc_state()
 
         with self._predicted_timesteps_lock:
