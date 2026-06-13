@@ -19,13 +19,13 @@ class HandTeleopConfig(TeleoperatorConfig):
     show_viz: bool = False
     start_paused: bool = False
     fps: int = 30
-    urdf_path: str = "so100"
-    frame_name: str = "gripper_link"
+    urdf_path: str = "gem"
+    frame_name: str = "gripper"
     focal_ratio: float = 0.7
     use_scroll: bool = False
     kf_q: float = 5e-4
     kf_r: float = 2e-2
     safe_range: dict[str, tuple[float, float]] | None = None
     debug_mode: bool = False
-    left_base_joint: tuple[float, float, float, float, float, float] | None = None
-    right_base_joint: tuple[float, float, float, float, float, float] | None = None
+    left_base_joint: tuple[float, ...] | None = None
+    right_base_joint: tuple[float, ...] | None = None

@@ -13,6 +13,7 @@ from lerobot.types import RobotAction
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_VIEWER_ROOT = Path("C:/github_personal/urdf-loaders-obj")
 GEM_JOINTS = ("joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6", "joint_7", "gripper")
 SO_TO_GEM = {
     "shoulder_pan": "joint_1",
@@ -45,6 +46,15 @@ def map_action_for_viewer(action: RobotAction, robot_type: str) -> RobotAction:
 
 def map_action_to_gem(action: RobotAction) -> RobotAction:
     return _map_action_to_gem(action)
+
+
+def resolve_viewer_urdf_path(robot_type: str, viewer_root: Path | None = None) -> Path:
+    root = viewer_root or DEFAULT_VIEWER_ROOT
+    if _viewer_model_name(robot_type) == "GEM":
+        return root / "urdf" / "GEM" / "urdf" / "GEM.urdf"
+    if _viewer_model_name(robot_type) == "SO-ARM101":
+        return root / "urdf" / "SO-ARM101" / "so101_old_calib.urdf"
+    raise ValueError(f"No viewer URDF registered for robot type {robot_type!r}.")
 
 
 def _map_action_to_gem(action: RobotAction) -> RobotAction:
@@ -128,7 +138,7 @@ class RobotArmViewer:
         if self.config.viewer_root is not None:
             script = Path(self.config.viewer_root) / "bin" / "robot-arm-viewer.js"
             return ["node", str(script), "--host", self.config.viewer_host, "--port", str(self.config.viewer_port)]
-        bundled_script = Path("C:/github_personal/urdf-loaders-obj/bin/robot-arm-viewer.js")
+        bundled_script = DEFAULT_VIEWER_ROOT / "bin" / "robot-arm-viewer.js"
         if bundled_script.is_file():
             return [
                 "node",
