@@ -35,7 +35,6 @@ class RobotArmViewerConfig:
     viewer_port: int = 8020
     viewer_root: Path | None = None
     arm_spacing_m: float = 0.2
-    mirror_right_arm: bool = False
     open_browser: bool = True
 
 
@@ -95,7 +94,6 @@ class RobotArmViewer:
                 "leader_control": True,
                 "load_sidecar": self.model_name == "GEM",
                 "fast_sidecar": True,
-                "mirror_right_arm": self.config.mirror_right_arm,
             },
         )
         if self.config.open_browser:
@@ -117,7 +115,6 @@ class RobotArmViewer:
                     "leader_control": True,
                     "load_sidecar": self.model_name == "GEM",
                     "fast_sidecar": True,
-                    "mirror_right_arm": self.config.mirror_right_arm,
                 },
             )
         self._post("action", {"actions": map_action_for_viewer(action, self.robot_type)})
