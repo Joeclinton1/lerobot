@@ -56,6 +56,7 @@ from .sac.configuration_sac import SACConfig
 from .smolvla.configuration_smolvla import SmolVLAConfig
 from .tdmpc.configuration_tdmpc import TDMPCConfig
 from .utils import validate_visual_features_consistency
+from .vla_jepa.configuration_vla_jepa import VLAJEPAConfig
 from .vqbet.configuration_vqbet import VQBeTConfig
 from .wall_x.configuration_wall_x import WallXConfig
 from .xvla.configuration_xvla import XVLAConfig
@@ -89,7 +90,7 @@ def get_policy_class(name: str) -> type[PreTrainedPolicy]:
     Args:
         name: The name of the policy. Supported names are "tdmpc", "diffusion", "act",
             "multi_task_dit", "vqbet", "pi0", "pi05", "sac", "smolvla", "wall_x",
-            "molmoact2".
+            "molmoact2", "vla_jepa".
     Returns:
         The policy class corresponding to the given name.
 
@@ -152,6 +153,10 @@ def get_policy_class(name: str) -> type[PreTrainedPolicy]:
         from .molmoact2.modeling_molmoact2 import MolmoAct2Policy
 
         return MolmoAct2Policy
+    elif name == "vla_jepa":
+        from .vla_jepa.modeling_vla_jepa import VLAJEPAPolicy
+
+        return VLAJEPAPolicy
     else:
         try:
             return _get_policy_cls_from_policy_name(name=name)
@@ -169,7 +174,7 @@ def make_policy_config(policy_type: str, **kwargs) -> PreTrainedConfig:
     Args:
         policy_type: The type of the policy. Supported types include "tdmpc",
                      "multi_task_dit", "diffusion", "act", "vqbet", "pi0", "pi05", "sac",
-                     "smolvla", "wall_x", "molmoact2".
+                     "smolvla", "wall_x", "molmoact2", "vla_jepa".
         **kwargs: Keyword arguments to be passed to the configuration class constructor.
 
     Returns:
@@ -204,6 +209,8 @@ def make_policy_config(policy_type: str, **kwargs) -> PreTrainedConfig:
         return WallXConfig(**kwargs)
     elif policy_type == "molmoact2":
         return MolmoAct2Config(**kwargs)
+    elif policy_type == "vla_jepa":
+        return VLAJEPAConfig(**kwargs)
     else:
         try:
             config_cls = PreTrainedConfig.get_choice_class(policy_type)
@@ -416,6 +423,14 @@ def make_pre_post_processors(
             config=policy_cfg,
             dataset_stats=kwargs.get("dataset_stats"),
             dataset_meta=kwargs.get("dataset_meta"),
+        )
+
+    elif isinstance(policy_cfg, VLAJEPAConfig):
+        from .vla_jepa.processor_vla_jepa import make_vla_jepa_pre_post_processors
+
+        processors = make_vla_jepa_pre_post_processors(
+            config=policy_cfg,
+            dataset_stats=kwargs.get("dataset_stats"),
         )
 
     else:

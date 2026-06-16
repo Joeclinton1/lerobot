@@ -200,6 +200,7 @@ groot = [
 sarm = ["lerobot[transformers-dep]", "pydantic>=2.0.0,<3.0.0", "faker>=33.0.0,<35.0.0", "lerobot[matplotlib-dep]", "lerobot[qwen-vl-utils-dep]"]
 xvla = ["lerobot[transformers-dep]"]
 hilserl = ["lerobot[transformers-dep]", "gym-hil>=0.1.13,<0.2.0", "lerobot[grpcio-dep]", "lerobot[placo-dep]"]
+vla_jepa = ["lerobot[transformers-dep]", "lerobot[diffusers-dep]", "lerobot[qwen-vl-utils-dep]"]
 
 # Features
 async = ["lerobot[grpcio-dep]", "lerobot[matplotlib-dep]"]
@@ -264,6 +265,7 @@ all = [
     # "lerobot[groot]", TODO(Steven): Gr00t requires specific installation instructions for flash-attn
     "lerobot[xvla]",
     "lerobot[hilserl]",
+    "lerobot[vla_jepa]",
     "lerobot[async]",
     "lerobot[dev]",
     "lerobot[test]",
@@ -299,6 +301,9 @@ lerobot-rollout="lerobot.scripts.lerobot_rollout:main"
 lerobot-arm-monitor="lerobot.scripts.lerobot_arms_monitor:main"
 
 # ---------------- Tool Configurations ----------------
+[tool.uv.extra-build-dependencies]
+chumpy = ["pip"]
+
 [tool.setuptools.package-data]
 lerobot = ["envs/*.json"]
 
