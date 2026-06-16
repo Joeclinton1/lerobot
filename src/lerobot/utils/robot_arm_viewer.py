@@ -13,6 +13,7 @@ from lerobot.types import RobotAction
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_VIEWER_ROOT = Path("C:/github_personal/urdf-loaders-obj")
 GEM_JOINTS = ("joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6", "joint_7", "gripper")
 SO_TO_GEM = {
     "shoulder_pan": "joint_1",
@@ -47,20 +48,30 @@ def map_action_to_gem(action: RobotAction) -> RobotAction:
     return _map_action_to_gem(action)
 
 
+def resolve_viewer_urdf_path(robot_type: str, viewer_root: Path | None = None) -> Path:
+    root = viewer_root or DEFAULT_VIEWER_ROOT
+    if _viewer_model_name(robot_type) == "GEM":
+        return root / "urdf" / "GEM" / "urdf" / "GEM.urdf"
+    if _viewer_model_name(robot_type) == "SO-ARM101":
+        return root / "urdf" / "SO-ARM101" / "so101_old_calib.urdf"
+    raise ValueError(f"No viewer URDF registered for robot type {robot_type!r}.")
+
+
 def _map_action_to_gem(action: RobotAction) -> RobotAction:
     mapped: RobotAction = {}
     for key, value in action.items():
         name = key.removesuffix(".pos")
-        _, joint = _split_side(name)
+        side, joint = _split_side(name)
         gem_joint = SO_TO_GEM.get(joint, joint)
         if gem_joint not in GEM_JOINTS:
             continue
-        mapped[f"{gem_joint}.pos"] = float(value)
+        prefix = f"{side}_" if side is not None else ""
+        mapped[f"{prefix}{gem_joint}.pos"] = float(value)
     return mapped
 
 
 class RobotArmViewer:
-    """Sidecar that mirrors single GEM joint actions into robot-arm-viewer."""
+    """Sidecar that mirrors GEM joint actions into robot-arm-viewer."""
 
     def __init__(self, config: RobotArmViewerConfig, robot_type: str):
         self.config = config
@@ -68,6 +79,7 @@ class RobotArmViewer:
         self.model_name = _viewer_model_name(robot_type)
         self._process: subprocess.Popen | None = None
         self._connected = False
+        self._mode = _viewer_mode(robot_type)
 
     def connect(self) -> None:
         if self.config.launch_viewer:
@@ -76,7 +88,7 @@ class RobotArmViewer:
         self._post(
             "configure",
             {
-                "mode": "single",
+                "mode": self._mode,
                 "robot": self.model_name,
                 "spacing_m": self.config.arm_spacing_m,
                 "leader_control": True,
@@ -92,6 +104,19 @@ class RobotArmViewer:
     def send_action(self, action: RobotAction) -> None:
         if not self._connected:
             return
+        if _is_bimanual_action(action) and self._mode != "dual":
+            self._mode = "dual"
+            self._post(
+                "configure",
+                {
+                    "mode": self._mode,
+                    "robot": self.model_name,
+                    "spacing_m": self.config.arm_spacing_m,
+                    "leader_control": True,
+                    "load_sidecar": self.model_name == "GEM",
+                    "fast_sidecar": True,
+                },
+            )
         self._post("action", {"actions": map_action_for_viewer(action, self.robot_type)})
 
     def disconnect(self) -> None:
@@ -113,7 +138,7 @@ class RobotArmViewer:
         if self.config.viewer_root is not None:
             script = Path(self.config.viewer_root) / "bin" / "robot-arm-viewer.js"
             return ["node", str(script), "--host", self.config.viewer_host, "--port", str(self.config.viewer_port)]
-        bundled_script = Path("C:/github_personal/urdf-loaders-obj/bin/robot-arm-viewer.js")
+        bundled_script = DEFAULT_VIEWER_ROOT / "bin" / "robot-arm-viewer.js"
         if bundled_script.is_file():
             return [
                 "node",
@@ -159,3 +184,11 @@ def _viewer_model_name(robot_type: str) -> str:
     if robot_type in {"so100_follower", "so101_follower"}:
         return "SO-ARM101"
     return "GEM"
+
+
+def _viewer_mode(robot_type: str) -> str:
+    return "dual" if robot_type in {"bi_gem", "bi_gem_follower", "bi_so_follower"} else "single"
+
+
+def _is_bimanual_action(action: RobotAction) -> bool:
+    return any(key.startswith(("left_", "right_")) for key in action)

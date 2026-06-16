@@ -68,6 +68,10 @@ def make_robot_from_config(config: RobotConfig) -> Robot:
         from .bi_openarm_follower import BiOpenArmFollower
 
         return BiOpenArmFollower(config)
+    elif config.type in ("bi_gem", "bi_gem_follower"):
+        from .bi_gem_follower import BiGemFollower
+
+        return BiGemFollower(config)
     elif config.type in ("gem", "gem_follower"):
         from .gem_follower import GemFollower
 

@@ -43,13 +43,15 @@ class MockPolicy:
             """Empty image features since this test doesn't use images."""
             return {}
 
-    def predict_action_chunk(self, observation: dict[str, torch.Tensor]) -> torch.Tensor:
+    def predict_action_chunk(self, observation: dict[str, torch.Tensor], **kwargs) -> torch.Tensor:
         """Return a chunk of 20 dummy actions."""
+        self.last_predict_kwargs = kwargs
         batch_size = len(observation[OBS_STATE])
-        return torch.zeros(batch_size, 20, 6)
+        return torch.arange(20 * 6, dtype=torch.float32).reshape(1, 20, 6).repeat(batch_size, 1, 1)
 
     def __init__(self):
         self.config = self._Config()
+        self.last_predict_kwargs = {}
 
     def to(self, *args, **kwargs):
         # The server calls `policy.to(device)`. This stub ignores it.
@@ -223,3 +225,50 @@ def test_predict_action_chunk(monkeypatch, policy_server):
     for i, ta in enumerate(timed_actions):
         expected_ts = obs.get_timestamp() + i * policy_server.config.environment_dt
         assert abs(ta.get_timestamp() - expected_ts) < 1e-6
+
+
+def test_rtc_predict_action_chunk_passes_leftover_prefix(policy_server):
+    from lerobot.policies.rtc.configuration_rtc import RTCConfig
+
+    policy_server.policy_type = "pi05"
+    policy_server.preprocessor = lambda obs: obs
+    policy_server.postprocessor = lambda tensor: tensor
+    policy_server.rtc_config = RTCConfig(enabled=True, execution_horizon=4)
+    policy_server.actions_per_chunk = 6
+
+    first_obs = _make_obs(torch.zeros(6), timestep=0)
+    policy_server._predict_action_chunk(first_obs)
+
+    second_obs = _make_obs(torch.ones(6) * 5, timestep=1)
+    policy_server._predict_action_chunk(second_obs)
+
+    prev_chunk = policy_server.policy.last_predict_kwargs["prev_chunk_left_over"]
+    assert prev_chunk.shape == (4, 6)
+    assert torch.allclose(prev_chunk[:4], torch.arange(12, 36, dtype=torch.float32).reshape(4, 6))
+
+
+def test_raw_observation_uses_rename_map_before_image_resize():
+    from lerobot.async_inference.helpers import raw_observation_to_observation
+    from lerobot.configs.types import FeatureType
+
+    raw_obs = {
+        "joint1": 0.0,
+        "head": torch.zeros(8, 8, 3, dtype=torch.uint8),
+    }
+    lerobot_features = {
+        OBS_STATE: {"dtype": "float32", "shape": [1], "names": ["joint1"]},
+        "observation.images.head": {"dtype": "video", "shape": [8, 8, 3], "names": ["height", "width", "channel"]},
+    }
+    policy_image_features = {
+        "observation.images.base_0_rgb": PolicyFeature(type=FeatureType.VISUAL, shape=(3, 4, 4))
+    }
+
+    obs = raw_observation_to_observation(
+        raw_obs,
+        lerobot_features,
+        policy_image_features,
+        {"observation.images.head": "observation.images.base_0_rgb"},
+    )
+
+    assert "observation.images.base_0_rgb" in obs
+    assert obs["observation.images.base_0_rgb"].shape == (1, 3, 4, 4)

@@ -75,6 +75,10 @@ def make_teleoperator_from_config(config: TeleoperatorConfig) -> "Teleoperator":
         from .homunculus import HomunculusArm
 
         return HomunculusArm(config)
+    elif config.type in ("hand_teleop", "handteleop"):
+        from .hand_teleop import HandTeleop
+
+        return HandTeleop(config)
     elif config.type == "unitree_g1":
         from .unitree_g1 import UnitreeG1Teleoperator
 
@@ -103,6 +107,10 @@ def make_teleoperator_from_config(config: TeleoperatorConfig) -> "Teleoperator":
         from .minion_arm import MinionArm
 
         return MinionArm(config)
+    elif config.type in ("bi_minion_arm", "bi_minionarm"):
+        from .bi_minion_arm import BiMinionArm
+
+        return BiMinionArm(config)
     else:
         try:
             return cast("Teleoperator", make_device_from_device_class(config))

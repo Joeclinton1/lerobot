@@ -67,6 +67,7 @@ from lerobot.processor import RobotAction, RobotObservation
 from lerobot.robots import (  # noqa: F401
     Robot,
     RobotConfig,
+    bi_gem_follower,
     bi_openarm_follower,
     bi_so_follower,
     earthrover_mini_plus,
@@ -80,13 +81,20 @@ from lerobot.robots import (  # noqa: F401
     so_follower,
     unitree_g1 as unitree_g1_robot,
 )
+
+# Import config modules to register supported robot and teleoperator subclasses with draccus.
+from lerobot.robots.bi_gem_follower import config_bi_gem_follower  # noqa: F401
+from lerobot.robots.gem_follower import config_gem_follower  # noqa: F401
+from lerobot.robots.none_robot import config_none_robot  # noqa: F401
 from lerobot.robots.none_robot.config_none_robot import NoneRobotConfig
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
     TeleoperatorConfig,
+    bi_minion_arm,
     bi_openarm_leader,
     bi_so_leader,
     gamepad,
+    hand_teleop,
     homunculus,
     keyboard,
     koch_leader,
@@ -99,15 +107,12 @@ from lerobot.teleoperators import (  # noqa: F401
     so_leader,
     unitree_g1,
 )
+from lerobot.teleoperators.bi_minion_arm import config_bi_minion_arm  # noqa: F401
+from lerobot.teleoperators.minion_arm import config_minion_arm  # noqa: F401
 from lerobot.utils.import_utils import register_third_party_plugins
 from lerobot.utils.robot_arm_viewer import RobotArmViewer, RobotArmViewerConfig, map_action_to_gem
 from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import init_logging, move_cursor_up
-
-# Import config modules to register supported robot and teleoperator subclasses with draccus.
-from lerobot.robots.gem_follower import config_gem_follower  # noqa: F401
-from lerobot.robots.none_robot import config_none_robot  # noqa: F401
-from lerobot.teleoperators.minion_arm import config_minion_arm  # noqa: F401
 
 if TYPE_CHECKING:
     from lerobot.processor import RobotProcessorPipeline
@@ -131,7 +136,7 @@ class TeleoperateConfig:
     display_compressed_images: bool = False
     teleop_calibrate: bool = True
     robot_calibrate: bool = True
-    # Optional robot-arm-viewer sidecar for visualizing GEM actions.
+    # Optional robot-arm-viewer sidecar for visualizing GEM/BiGEM actions.
     viewer: RobotArmViewerConfig = field(default_factory=RobotArmViewerConfig)
 
 
@@ -186,13 +191,13 @@ def teleop_loop(
 
         # Process action for robot through pipeline
         robot_action_to_send = robot_action_processor((teleop_action, obs))
-        if robot.name == "gem":
+        if robot.name in {"gem", "bi_gem"}:
             robot_action_to_send = map_action_to_gem(robot_action_to_send)
 
         # Send processed action to robot (robot_action_processor.to_output should return RobotAction)
         sent_action = robot.send_action(robot_action_to_send)
         if viewer is not None:
-            viewer.send_action(sent_action)
+            viewer.send_action(raw_action if _is_bimanual_action(raw_action) else sent_action)
 
         if display_data:
             from lerobot.utils.visualization_utils import log_rerun_data
@@ -282,6 +287,10 @@ def make_robot_arm_viewer(config: RobotArmViewerConfig, robot_type: str) -> Robo
     if not config.enabled:
         return None
     return RobotArmViewer(config, robot_type)
+
+
+def _is_bimanual_action(action: RobotAction) -> bool:
+    return any(key.startswith(("left_", "right_")) for key in action)
 
 
 def main():

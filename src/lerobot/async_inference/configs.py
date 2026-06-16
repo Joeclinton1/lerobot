@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 
 import torch
 
+from lerobot.policies.rtc.configuration_rtc import RTCConfig
 from lerobot.robots.config import RobotConfig
 
 from .constants import (
@@ -137,6 +138,11 @@ class RobotClientConfig:
     chunk_size_threshold: float = field(default=0.5, metadata={"help": "Threshold for chunk size control"})
     fps: int = field(default=DEFAULT_FPS, metadata={"help": "Frames per second"})
 
+    # RTC configuration. When enabled, the policy server will pass the unexecuted tail of the previous
+    # model-space action chunk back into policies that support Real-Time Chunking.
+    use_rtc: bool = field(default=False, metadata={"help": "Enable Real-Time Chunking on the policy server"})
+    rtc: RTCConfig = field(default_factory=RTCConfig, metadata={"help": "Real-Time Chunking config"})
+
     # Aggregate function configuration (CLI-compatible)
     aggregate_fn_name: str = field(
         default="weighted_average",
@@ -200,4 +206,6 @@ class RobotClientConfig:
             "task": self.task,
             "debug_visualize_queue_size": self.debug_visualize_queue_size,
             "aggregate_fn_name": self.aggregate_fn_name,
+            "use_rtc": self.use_rtc,
+            "rtc": self.rtc,
         }
