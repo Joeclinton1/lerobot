@@ -127,6 +127,7 @@ class RobotClient:
         self.action_queue = Queue()
         self.action_queue_lock = threading.Lock()  # Protect queue operations
         self.action_queue_size = []
+        self.last_sent_observation_timestep: int | None = None
         self.start_barrier = threading.Barrier(2)  # 2 threads: action receiver, control loop
 
         # FPS measurement
@@ -431,7 +432,15 @@ class RobotClient:
                 observation.must_go = self.must_go.is_set() and self.action_queue.empty()
                 current_queue_size = self.action_queue.qsize()
 
+            if not observation.must_go and self.last_sent_observation_timestep == observation.get_timestep():
+                if verbose:
+                    self.logger.debug(
+                        f"Skipping duplicate observation #{observation.get_timestep()} already sent"
+                    )
+                return raw_observation
+
             _ = self.send_observation(observation)
+            self.last_sent_observation_timestep = observation.get_timestep()
 
             self.logger.debug(f"QUEUE SIZE: {current_queue_size} (Must go: {observation.must_go})")
             if observation.must_go:
