@@ -95,7 +95,9 @@ def raw_observation_to_observation(
 ) -> Observation:
     observation = {}
 
-    observation = prepare_raw_observation(raw_observation, lerobot_features, policy_image_features, rename_map)
+    observation = prepare_raw_observation(
+        raw_observation, lerobot_features, policy_image_features, rename_map
+    )
     for k, v in observation.items():
         if isinstance(v, torch.Tensor):  # VLAs present natural-language instructions in observations
             if "image" in k:
@@ -196,8 +198,9 @@ def get_logger(name: str, log_to_file: bool = True) -> logging.Logger:
     else:
         log_file = None
 
-    # Initialize the standardized logging
-    init_logging(log_file=log_file, display_pid=False)
+    # Initialize the standardized logging while allowing an interactive console override.
+    console_level = os.environ.get("LEROBOT_ASYNC_CONSOLE_LOG_LEVEL", "INFO")
+    init_logging(log_file=log_file, display_pid=False, console_level=console_level)
 
     # Return a named logger
     return logging.getLogger(name)

@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
@@ -31,18 +32,23 @@ else:
 
 from .configuration_vla_jepa import VLAJEPAConfig
 
+logger = logging.getLogger(__name__)
+
 
 class Qwen3VLInterface(torch.nn.Module):
     def __init__(self, config: VLAJEPAConfig) -> None:
         super().__init__()
         self.config = config
+        logger.info("Loading Qwen3-VL model: %s", config.qwen_model_name)
         self.model = Qwen3VLForConditionalGeneration.from_pretrained(
             config.qwen_model_name,
             torch_dtype=self._get_torch_dtype(config.torch_dtype),
         )
+        logger.info("Qwen3-VL model loaded; loading processor: %s", config.qwen_model_name)
         self.processor = AutoProcessor.from_pretrained(config.qwen_model_name)
         self.processor.tokenizer.padding_side = config.tokenizer_padding_side
         self.model.config.hidden_size = self.model.config.text_config.hidden_size
+        logger.info("Qwen3-VL processor loaded")
 
     @staticmethod
     def _get_torch_dtype(dtype_name: str) -> torch.dtype:

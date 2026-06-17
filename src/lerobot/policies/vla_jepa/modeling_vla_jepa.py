@@ -41,6 +41,8 @@ from .configuration_vla_jepa import VLAJEPAConfig
 from .qwen_interface import Qwen3VLInterface
 from .world_model import ActionConditionedVideoPredictor
 
+logger = logging.getLogger(__name__)
+
 # ============================================================================
 # Native VLA-JEPA Model - follows original starVLA VLA_JEPA.py implementation
 # ============================================================================
@@ -69,23 +71,29 @@ class VLAJEPAModel(nn.Module):
         self.config = config
 
         # Vision-language backbone
+        logger.info("Initializing VLA-JEPA Qwen backbone")
         self.qwen = Qwen3VLInterface(config)
 
         # Tokenizer expansion for special action tokens
+        logger.info("Expanding VLA-JEPA tokenizer action tokens")
         self.action_tokens, self.action_token_ids, self.embodied_action_token_id = (
             self.qwen.expand_tokenizer()
         )
 
         # Action head (flow-matching DiT)
+        logger.info("Initializing VLA-JEPA action head")
         self.action_model = VLAJEPAActionHead(config, cross_attention_dim=self.qwen.model.config.hidden_size)
 
         # JEPA world model components
         if config.enable_world_model:
+            logger.info("Loading V-JEPA video encoder: %s", config.jepa_encoder_name)
             self.video_encoder = AutoModel.from_pretrained(
                 config.jepa_encoder_name,
                 torch_dtype=self.qwen._get_torch_dtype(config.torch_dtype),
             )
+            logger.info("V-JEPA video encoder loaded; loading video processor: %s", config.jepa_encoder_name)
             self.video_processor = AutoVideoProcessor.from_pretrained(config.jepa_encoder_name)
+            logger.info("V-JEPA video processor loaded; initializing video predictor")
             num_views = config.jepa_tubelet_size
             tubelet_size = self.video_encoder.config.tubelet_size
             image_size = getattr(self.video_encoder.config, "image_size", None)
@@ -105,6 +113,7 @@ class VLAJEPAModel(nn.Module):
                 mlp_ratio=config.predictor_mlp_ratio,
                 num_action_tokens_per_step=config.num_action_tokens_per_timestep,
             )
+            logger.info("VLA-JEPA video predictor initialized")
         else:
             self.video_encoder = None
             self.video_processor = None

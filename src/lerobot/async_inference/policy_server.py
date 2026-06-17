@@ -170,7 +170,9 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
             if cfg_names:
                 self._relative_step.action_names = list(cfg_names)
 
-    def _get_rtc_leftovers(self, observation_timestep: int) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+    def _get_rtc_leftovers(
+        self, observation_timestep: int
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
         if (
             self._last_original_actions is None
             or self._last_processed_actions is None
@@ -251,12 +253,19 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         policy_class = get_policy_class(self.policy_type)
 
         start = time.perf_counter()
+        self.logger.info(
+            "Loading policy weights: type=%s, pretrained_name_or_path=%s",
+            self.policy_type,
+            policy_specs.pretrained_name_or_path,
+        )
         self.policy = policy_class.from_pretrained(policy_specs.pretrained_name_or_path)
+        self.logger.info("Policy weights loaded; moving policy to %s", self.device)
         if self.rtc_config is not None:
             self.policy.config.rtc_config = self.rtc_config
             if hasattr(self.policy, "init_rtc_processor"):
                 self.policy.init_rtc_processor()
         self.policy.to(self.device)
+        self.logger.info("Policy moved to %s; loading policy processors", self.device)
 
         # Load preprocessor and postprocessor, overriding device to match requested device
         device_override = {"device": self.device}
@@ -270,6 +279,7 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
             preprocessor_overrides=preprocessor_overrides,
             postprocessor_overrides={"device_processor": device_override},
         )
+        self.logger.info("Policy processors loaded")
         self.rename_map = self._extract_preprocessor_rename_map()
         self._setup_rtc_processor_steps()
         self._clear_rtc_state()
@@ -444,7 +454,11 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
             prev_actions, processed_prev_actions = self._get_rtc_leftovers(observation_timestep)
             if prev_actions is not None and self._relative_step is not None:
                 raw_state = self._relative_step.get_cached_state()
-                if raw_state is not None and processed_prev_actions is not None and processed_prev_actions.numel():
+                if (
+                    raw_state is not None
+                    and processed_prev_actions is not None
+                    and processed_prev_actions.numel()
+                ):
                     prev_actions = reanchor_relative_rtc_prefix(
                         prev_actions_absolute=processed_prev_actions,
                         current_state=raw_state,
