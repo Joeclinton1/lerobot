@@ -76,7 +76,7 @@ def make_teleoperator_from_config(config: TeleoperatorConfig) -> "Teleoperator":
 
         return HomunculusArm(config)
     elif config.type in ("hand_teleop", "handteleop"):
-        from .hand_teleop import HandTeleop
+        from .hand_teleop.hand_teleop import HandTeleop
 
         return HandTeleop(config)
     elif config.type == "unitree_g1":

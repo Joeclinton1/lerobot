@@ -54,6 +54,7 @@ lerobot-teleoperate \
 """
 
 import logging
+import os
 import time
 from dataclasses import asdict, dataclass, field
 from pprint import pformat
@@ -170,6 +171,7 @@ def teleop_loop(
     """
 
     display_len = max((len(key) for key in robot.action_features), default=1)
+    viewer_action_state: RobotAction | None = None
     start = time.perf_counter()
     while True:
         loop_start = time.perf_counter()
@@ -183,8 +185,10 @@ def teleop_loop(
         if robot.name == "unitree_g1":
             teleop.send_feedback(obs)
 
-        # Get teleop action
-        raw_action = teleop.get_action()
+        # Get teleop action. Hand teleop uses current joint state as its IK seed.
+        raw_action = _get_teleop_action(teleop, obs, viewer_action_state if robot.name == "none" else None)
+        if robot.name == "none" and _is_hand_teleop(teleop):
+            viewer_action_state = dict(raw_action)
 
         # Process teleop action through pipeline
         teleop_action = teleop_action_processor((raw_action, obs))
@@ -245,14 +249,26 @@ def teleoperate(cfg: TeleoperateConfig):
     if cfg.viewer.only and not cfg.viewer.enabled:
         raise ValueError("--viewer.only=true requires --viewer.enabled=true")
 
-    teleop = make_teleoperator_from_config(cfg.teleop)
-    robot = make_robot_from_config(NoneRobotConfig()) if cfg.viewer.only else make_robot_from_config(cfg.robot)
-    viewer = make_robot_arm_viewer(cfg.viewer, cfg.robot.type)
+    if _is_hand_teleop_config(cfg.teleop):
+        os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+
     from lerobot.processor import make_default_processors
 
     teleop_action_processor, robot_action_processor, robot_observation_processor = make_default_processors()
 
+    teleop = make_teleoperator_from_config(cfg.teleop)
+    robot = make_robot_from_config(NoneRobotConfig()) if cfg.viewer.only else make_robot_from_config(cfg.robot)
+    viewer = make_robot_arm_viewer(cfg.viewer, cfg.robot.type)
+
     teleop.connect(calibrate=cfg.teleop_calibrate)
+    if (
+        cfg.viewer.only
+        and _is_hand_teleop(teleop)
+        and cfg.robot.type in {"gem", "gem_follower", "bi_gem", "bi_gem_follower"}
+    ):
+        align_to_viewer = getattr(teleop, "align_kinematics_to_gem_viewer", None)
+        if align_to_viewer is not None:
+            align_to_viewer()
     robot.connect(calibrate=cfg.robot_calibrate)
     if viewer is not None:
         viewer.connect()
@@ -291,6 +307,39 @@ def make_robot_arm_viewer(config: RobotArmViewerConfig, robot_type: str) -> Robo
 
 def _is_bimanual_action(action: RobotAction) -> bool:
     return any(key.startswith(("left_", "right_")) for key in action)
+
+
+def _is_hand_teleop(teleop: Teleoperator) -> bool:
+    return getattr(teleop, "name", None) in {"hand_teleop", "handteleop"} or teleop.__class__.__name__ == "HandTeleop"
+
+
+def _is_hand_teleop_config(teleop_config: TeleoperatorConfig) -> bool:
+    return getattr(teleop_config, "type", None) in {"hand_teleop", "handteleop"}
+
+
+def _get_teleop_action(
+    teleop: Teleoperator,
+    obs: RobotObservation,
+    fallback_state: RobotAction | None,
+) -> RobotAction:
+    if not _is_hand_teleop(teleop):
+        return teleop.get_action()
+
+    current_state = _current_state_for_hand_teleop(teleop, obs, fallback_state)
+    if current_state is None:
+        return teleop.get_action()
+    return teleop.get_action(current_state)
+
+
+def _current_state_for_hand_teleop(
+    teleop: Teleoperator,
+    obs: RobotObservation,
+    fallback_state: RobotAction | None,
+) -> RobotAction | None:
+    action_features = getattr(teleop, "action_features", {})
+    if action_features and all(key in obs for key in action_features):
+        return {key: float(obs[key]) for key in action_features}
+    return fallback_state
 
 
 def main():

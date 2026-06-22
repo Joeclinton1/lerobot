@@ -17,6 +17,7 @@ class HandTeleopConfig(TeleoperatorConfig):
     model: Literal["wilor", "mediapipe", "apriltag"] = "wilor"
     device: str | None = None
     show_viz: bool = False
+    debug_viz: bool = False
     start_paused: bool = False
     fps: int = 30
     urdf_path: str = "gem"
