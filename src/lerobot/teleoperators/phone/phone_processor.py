@@ -84,6 +84,7 @@ class MapPhoneActionToRobotAction(RobotActionProcessorStep):
     target_y_sign: float = 1.0
     target_z_sign: float = 1.0
     orientation_scale: float = 1.0
+    absolute_gripper: bool = False
 
     def action(self, action: RobotAction) -> RobotAction:
         """
@@ -110,7 +111,12 @@ class MapPhoneActionToRobotAction(RobotActionProcessorStep):
         rotvec = rot.as_rotvec()  # Absolute orientation as rotvec
 
         # Map certain inputs to certain actions
-        if self.platform == PhoneOS.IOS:
+        if self.absolute_gripper:
+            # The phone slider sends an absolute, normalized gripper position in [0, 1]. Carried
+            # through the gripper_vel slot and interpreted as a position by GripperVelocityToJoint
+            # (absolute=True).
+            gripper_vel = float(inputs.get("gripper", 0.0))
+        elif self.platform == PhoneOS.IOS:
             gripper_vel = float(inputs.get("a3", 0.0))
         else:
             a = float(inputs.get("reservedButtonA", 0.0))

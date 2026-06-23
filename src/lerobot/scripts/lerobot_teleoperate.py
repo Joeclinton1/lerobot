@@ -406,6 +406,7 @@ def _make_phone_to_gem_processors(teleop_config: TeleoperatorConfig, robot_confi
                 target_y_sign=target_signs[1],
                 target_z_sign=target_signs[2],
                 orientation_scale=orientation_scale,
+                absolute_gripper=True,
             ),
             EEReferenceAndDelta(
                 kinematics=kinematics,
@@ -423,6 +424,7 @@ def _make_phone_to_gem_processors(teleop_config: TeleoperatorConfig, robot_confi
                 clip_min=0.0,
                 clip_max=100.0,
                 gripper_name=gripper_name,
+                absolute=True,
             ),
         ],
         to_transition=robot_action_observation_to_transition,

@@ -349,6 +349,7 @@ class AndroidPhone(BasePhone, Teleoperator):
         msg = self._latest_message or {}
         raw_inputs["move"] = bool(msg.get("move", False))
         raw_inputs["scale"] = float(msg.get("scale", 1.0))
+        raw_inputs["gripper"] = float(msg.get("gripper", 0.0))
         raw_inputs["reservedButtonA"] = bool(msg.get("reservedButtonA", False))
         raw_inputs["reservedButtonB"] = bool(msg.get("reservedButtonB", False))
 

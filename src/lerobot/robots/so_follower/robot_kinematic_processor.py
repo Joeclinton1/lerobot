@@ -542,6 +542,9 @@ class GripperVelocityToJoint(RobotActionProcessorStep):
         clip_min: The minimum allowed gripper joint position.
         clip_max: The maximum allowed gripper joint position.
         discrete_gripper: If True, treat the input action as discrete (0: open, 1: close, 2: stay).
+        absolute: If True, treat the incoming command as an absolute, normalized gripper position in
+            [0, 1] (mapped to [clip_min, clip_max]) instead of integrating it as a velocity. Used by
+            the phone slider, which commands gripper position directly.
     """
 
     speed_factor: float = 20.0
@@ -549,11 +552,20 @@ class GripperVelocityToJoint(RobotActionProcessorStep):
     clip_max: float = 100.0
     discrete_gripper: bool = False
     gripper_name: str = "gripper"
+    absolute: bool = False
 
     def action(self, action: RobotAction) -> RobotAction:
         observation = self.transition.get(TransitionKey.OBSERVATION)
 
         gripper_vel = action.pop("ee.gripper_vel")
+
+        if self.absolute:
+            # Absolute position command: the slider sends a normalized [0, 1] value.
+            gripper_pos = float(
+                np.clip(float(gripper_vel) * self.clip_max, self.clip_min, self.clip_max)
+            )
+            action["ee.gripper_pos"] = gripper_pos
+            return action
 
         if observation is None:
             raise ValueError("Joints observation is require for computing robot kinematics")
