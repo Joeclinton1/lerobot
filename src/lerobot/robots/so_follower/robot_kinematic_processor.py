@@ -285,6 +285,7 @@ class InverseKinematicsEEToJoints(RobotActionProcessorStep):
     seed_joint_indices: list[int] | None = None
     seed_offsets_deg: list[float] | None = None
     _last_reject_t: float = field(default=0.0, init=False, repr=False)
+    _hold_target: np.ndarray | None = field(default=None, init=False, repr=False)
 
     def action(self, action: RobotAction) -> RobotAction:
         x = action.pop("ee.x")
@@ -319,7 +320,13 @@ class InverseKinematicsEEToJoints(RobotActionProcessorStep):
         t_des[:3, 3] = [x, y, z]
 
         if not enabled:
-            q_target = q_raw
+            # Hold a fixed setpoint latched once at the moment of release, rather than
+            # re-commanding the measured pose every step. Re-commanding the measured pose lets
+            # gravity ratchet the arm down: each sag becomes the new target, so the controller
+            # stops resisting. Freezing the setpoint keeps it actively holding position.
+            if self._hold_target is None:
+                self._hold_target = q_raw.copy()
+            q_target = self._hold_target
             self.q_curr = q_target
             for i, name in enumerate(self.motor_names):
                 if name != self.gripper_name:
@@ -327,6 +334,9 @@ class InverseKinematicsEEToJoints(RobotActionProcessorStep):
                 else:
                     action[f"{self.gripper_name}.pos"] = float(gripper_pos)
             return action
+
+        # Re-latch the hold setpoint on the next release.
+        self._hold_target = None
 
         q_reference = self.q_curr.copy()
 
@@ -459,6 +469,61 @@ class InverseKinematicsEEToJoints(RobotActionProcessorStep):
     def reset(self):
         """Resets the initial guess for the IK solver."""
         self.q_curr = None
+        self._hold_target = None
+
+
+@ProcessorStepRegistry.register("joint_rate_limit")
+@dataclass
+class JointRateLimit(RobotActionProcessorStep):
+    """
+    Slew-rate limiter on joint position commands.
+
+    Caps how far any joint may move in a single control step, measured against the robot's *current
+    measured* joint positions. When the largest joint delta exceeds the cap, the whole joint-space
+    step is scaled down uniformly, so the motion direction -- including the redundant elbow -- is
+    preserved while its speed is bounded.
+
+    This is the safety net that the Cartesian ``max_ee_step_m`` limit cannot provide: a noisy
+    tracking jump or an IK branch change can move joints (especially the null-space elbow) a long way
+    while the end-effector barely moves. Limiting against the measured position also bounds the
+    command/reality gap, so a stiff position controller never sees a large step to chase.
+
+    Attributes:
+        motor_names: Joint names to limit (the gripper is passed through unchanged).
+        max_joint_step_deg: Maximum allowed change of any single joint per control step (degrees).
+        gripper_name: Name of the gripper joint, excluded from limiting.
+    """
+
+    motor_names: list[str]
+    max_joint_step_deg: float = 3.0
+    gripper_name: str = "gripper"
+
+    def action(self, action: RobotAction) -> RobotAction:
+        keys = [f"{name}.pos" for name in self.motor_names if name != self.gripper_name]
+        if any(key not in action for key in keys):
+            return action
+
+        observation = self.transition.get(TransitionKey.OBSERVATION)
+        if observation is None:
+            raise ValueError("Joints observation is required for joint rate limiting")
+        if any(key not in observation for key in keys):
+            raise ValueError("Missing measured joint positions required for joint rate limiting")
+
+        current = np.array([float(observation[key]) for key in keys], dtype=float)
+        target = np.array([float(action[key]) for key in keys], dtype=float)
+        deltas = target - current
+
+        max_abs = float(np.max(np.abs(deltas))) if deltas.size else 0.0
+        if max_abs > self.max_joint_step_deg:
+            limited = current + deltas * (self.max_joint_step_deg / max_abs)
+            for key, value in zip(keys, limited, strict=True):
+                action[key] = float(value)
+        return action
+
+    def transform_features(
+        self, features: dict[PipelineFeatureType, dict[str, PolicyFeature]]
+    ) -> dict[PipelineFeatureType, dict[str, PolicyFeature]]:
+        return features
 
 
 @ProcessorStepRegistry.register("gripper_velocity_to_joint")

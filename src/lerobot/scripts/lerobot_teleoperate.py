@@ -365,6 +365,7 @@ def _make_phone_to_gem_processors(teleop_config: TeleoperatorConfig, robot_confi
         EEReferenceAndDelta,
         GripperVelocityToJoint,
         InverseKinematicsEEToJoints,
+        JointRateLimit,
     )
     from lerobot.teleoperators.phone.phone_processor import MapPhoneActionToRobotAction
 
@@ -386,6 +387,7 @@ def _make_phone_to_gem_processors(teleop_config: TeleoperatorConfig, robot_confi
     orientation_scale = float(getattr(teleop_config, "orientation_scale", 1.0))
     position_weight = float(getattr(teleop_config, "position_weight", 200.0))
     orientation_weight = float(getattr(teleop_config, "orientation_weight", 4.0))
+    max_joint_step_deg = float(getattr(teleop_config, "max_joint_step_deg", 3.0))
 
     is_bimanual_gem = getattr(robot_config, "type", None) in {"bi_gem", "bi_gem_follower"}
     motor_names = [f"{arm}_{name}" for name in GEM_MOTOR_NAMES] if is_bimanual_gem else GEM_MOTOR_NAMES
@@ -440,7 +442,14 @@ def _make_phone_to_gem_processors(teleop_config: TeleoperatorConfig, robot_confi
                 # The kinematics posture task now resolves the redundant elbow deterministically,
                 # so the multi-seed elbow search is no longer needed.
                 joint_selection_weights=[0.5, 1.0, 4.0, 2.0, 1.5, 1.5, 1.0, 0.0],
-            )
+            ),
+            # Final safety net: bound per-step joint motion so tracking jumps or elbow branch
+            # changes ramp smoothly instead of snapping. Runs after IK on the actual joint commands.
+            JointRateLimit(
+                motor_names=motor_names,
+                max_joint_step_deg=max_joint_step_deg,
+                gripper_name=gripper_name,
+            ),
         ],
         to_transition=robot_action_observation_to_transition,
         to_output=transition_to_robot_action,

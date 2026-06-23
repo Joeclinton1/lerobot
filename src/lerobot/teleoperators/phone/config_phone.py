@@ -56,6 +56,11 @@ class PhoneConfig(TeleoperatorConfig):
     # posture weight so redundancy resolution never pulls the end-effector off target.
     position_weight: float = 200.0
     orientation_weight: float = 4.0
+    # Per-control-step cap on any single joint's motion (deg). Bounds joint velocity so bad tracking
+    # jumps or elbow branch changes ramp smoothly instead of snapping; max joint speed is roughly
+    # max_joint_step_deg * loop_rate. Lower it (e.g. 2-3) for the first hardware runs, raise it for
+    # snappier tracking once motion looks safe.
+    max_joint_step_deg: float = 6.0
     camera_offset = np.array(
         [0.0, -0.02, 0.04]
     )  # iPhone 14 Pro camera is 2cm off center and 4cm above center
