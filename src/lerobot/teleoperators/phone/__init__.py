@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .config_phone import PhoneConfig
+from .config_phone import PhoneArm, PhoneConfig, PhoneOS
 from .teleop_phone import Phone
 
-__all__ = ["Phone", "PhoneConfig"]
+__all__ = ["Phone", "PhoneArm", "PhoneConfig", "PhoneOS"]

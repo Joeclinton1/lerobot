@@ -34,6 +34,9 @@ class RobotKinematics:
         urdf_path: str,
         target_frame_name: str = "gripper_frame_link",
         joint_names: list[str] | None = None,
+        posture_target_deg: np.ndarray | list[float] | None = None,
+        posture_weight: float = 1e-2,
+        enforce_joint_limits: bool = False,
     ):
         """
         Initialize placo-based kinematics solver.
@@ -42,6 +45,15 @@ class RobotKinematics:
             urdf_path (str): Path to the robot URDF file
             target_frame_name (str): Name of the end-effector frame in the URDF
             joint_names (list[str] | None): List of joint names to use for the kinematics solver
+            posture_target_deg: Optional neutral joint posture (degrees) used as a low-priority
+                regularization task. For redundant (e.g. 7-DOF) arms this resolves the null space
+                deterministically -- the redundant joints (the "elbow") settle to the same
+                comfortable configuration regardless of the IK seed, instead of drifting
+                arbitrarily. Has no effect on non-redundant arms (no null space to fill).
+            posture_weight: Weight of the posture task. Must be << the frame-task position weight so
+                it only acts within the null space and does not pull the end-effector off target.
+            enforce_joint_limits: If True, constrain the solver to the URDF joint limits so the
+                redundant branch cannot wander into an out-of-range configuration.
         """
         require_package("placo", extra="placo-dep")
 
@@ -54,8 +66,22 @@ class RobotKinematics:
         # Set joint names
         self.joint_names = list(self.robot.joint_names()) if joint_names is None else joint_names
 
+        if enforce_joint_limits:
+            # Position-limit constraints are expressed as velocity bounds over solver.dt; dt=1.0
+            # lets a single solve step reach a limit, so convergence is not throttled.
+            self.solver.dt = 1.0
+            self.solver.enable_joint_limits(True)
+
         # Initialize frame task for IK
         self.tip_frame = self.solver.add_frame_task(self.target_frame_name, np.eye(4))
+
+        # Optional null-space posture regularization (redundancy resolution).
+        self.posture_task = None
+        if posture_target_deg is not None:
+            posture_rad = np.deg2rad(np.asarray(posture_target_deg, dtype=float))[: len(self.joint_names)]
+            self.posture_task = self.solver.add_joints_task()
+            self.posture_task.set_joints(dict(zip(self.joint_names, posture_rad, strict=True)))
+            self.posture_task.configure("posture", "soft", posture_weight)
 
     def forward_kinematics(self, joint_pos_deg: np.ndarray) -> np.ndarray:
         """

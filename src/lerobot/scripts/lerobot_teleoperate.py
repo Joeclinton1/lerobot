@@ -104,6 +104,7 @@ from lerobot.teleoperators import (  # noqa: F401
     omx_leader,
     openarm_leader,
     openarm_mini,
+    phone,
     reachy2_teleoperator,
     so_leader,
     unitree_g1,
@@ -152,6 +153,7 @@ def teleop_loop(
     duration: float | None = None,
     display_compressed_images: bool = False,
     viewer: RobotArmViewer | None = None,
+    viewer_initial_action: RobotAction | None = None,
 ):
     """
     This function continuously reads actions from a teleoperation device, processes them through optional
@@ -171,7 +173,9 @@ def teleop_loop(
     """
 
     display_len = max((len(key) for key in robot.action_features), default=1)
-    viewer_action_state: RobotAction | None = None
+    viewer_action_state: RobotAction | None = (
+        None if viewer_initial_action is None else dict(viewer_initial_action)
+    )
     start = time.perf_counter()
     while True:
         loop_start = time.perf_counter()
@@ -181,6 +185,8 @@ def teleop_loop(
         # teleop_action_processor can take None as an observation
         # given that it is the identity processor as default
         obs = robot.get_observation()
+        if not obs and viewer_action_state is not None:
+            obs = dict(viewer_action_state)
 
         if robot.name == "unitree_g1":
             teleop.send_feedback(obs)
@@ -200,6 +206,8 @@ def teleop_loop(
 
         # Send processed action to robot (robot_action_processor.to_output should return RobotAction)
         sent_action = robot.send_action(robot_action_to_send)
+        if robot.name == "none" and _is_joint_position_action(sent_action):
+            viewer_action_state = dict(sent_action)
         if viewer is not None:
             viewer.send_action(raw_action if _is_bimanual_action(raw_action) else sent_action)
 
@@ -252,13 +260,14 @@ def teleoperate(cfg: TeleoperateConfig):
     if _is_hand_teleop_config(cfg.teleop):
         os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
-    from lerobot.processor import make_default_processors
-
-    teleop_action_processor, robot_action_processor, robot_observation_processor = make_default_processors()
+    teleop_action_processor, robot_action_processor, robot_observation_processor = (
+        _make_teleoperate_processors(cfg)
+    )
 
     teleop = make_teleoperator_from_config(cfg.teleop)
     robot = make_robot_from_config(NoneRobotConfig()) if cfg.viewer.only else make_robot_from_config(cfg.robot)
     viewer = make_robot_arm_viewer(cfg.viewer, cfg.robot.type)
+    viewer_initial_action = _viewer_initial_action(cfg)
 
     teleop.connect(calibrate=cfg.teleop_calibrate)
     if (
@@ -285,6 +294,7 @@ def teleoperate(cfg: TeleoperateConfig):
             robot_observation_processor=robot_observation_processor,
             display_compressed_images=display_compressed_images,
             viewer=viewer,
+            viewer_initial_action=viewer_initial_action,
         )
     except KeyboardInterrupt:
         pass
@@ -309,12 +319,146 @@ def _is_bimanual_action(action: RobotAction) -> bool:
     return any(key.startswith(("left_", "right_")) for key in action)
 
 
+def _is_joint_position_action(action: RobotAction) -> bool:
+    return any(key.endswith(".pos") for key in action)
+
+
 def _is_hand_teleop(teleop: Teleoperator) -> bool:
     return getattr(teleop, "name", None) in {"hand_teleop", "handteleop"} or teleop.__class__.__name__ == "HandTeleop"
 
 
 def _is_hand_teleop_config(teleop_config: TeleoperatorConfig) -> bool:
     return getattr(teleop_config, "type", None) in {"hand_teleop", "handteleop"}
+
+
+def _is_phone_teleop_config(teleop_config: TeleoperatorConfig) -> bool:
+    return getattr(teleop_config, "type", None) == "phone"
+
+
+def _is_single_gem_robot_config(robot_config: RobotConfig) -> bool:
+    return getattr(robot_config, "type", None) in {"gem", "gem_follower"}
+
+
+def _is_gem_robot_config(robot_config: RobotConfig) -> bool:
+    return getattr(robot_config, "type", None) in {"gem", "gem_follower", "bi_gem", "bi_gem_follower"}
+
+
+def _make_teleoperate_processors(cfg: TeleoperateConfig):
+    if _is_phone_teleop_config(cfg.teleop) and _is_gem_robot_config(cfg.robot):
+        return _make_phone_to_gem_processors(cfg.teleop, cfg.robot)
+
+    from lerobot.processor import make_default_processors
+
+    return make_default_processors()
+
+
+def _make_phone_to_gem_processors(teleop_config: TeleoperatorConfig, robot_config: RobotConfig):
+    from lerobot.processor import (
+        RobotProcessorPipeline,
+        make_default_robot_observation_processor,
+        robot_action_observation_to_transition,
+        transition_to_robot_action,
+    )
+    from lerobot.robots.gem_follower.kinematics import GEM_MOTOR_NAMES, make_gem_kinematics
+    from lerobot.robots.so_follower.robot_kinematic_processor import (
+        EEBoundsAndSafety,
+        EEReferenceAndDelta,
+        GripperVelocityToJoint,
+        InverseKinematicsEEToJoints,
+    )
+    from lerobot.teleoperators.phone.phone_processor import MapPhoneActionToRobotAction
+
+    arm = getattr(getattr(teleop_config, "arm", "left"), "value", getattr(teleop_config, "arm", "left"))
+    if arm not in {"left", "right"}:
+        raise ValueError(f"Unsupported phone arm {arm!r}; expected 'left' or 'right'.")
+
+    target_axes = (
+        getattr(teleop_config, "target_x_axis", "x"),
+        getattr(teleop_config, "target_y_axis", "y"),
+        getattr(teleop_config, "target_z_axis", "z"),
+    )
+    target_signs = (
+        float(getattr(teleop_config, "target_x_sign", 1.0)),
+        float(getattr(teleop_config, "target_y_sign", 1.0)),
+        float(getattr(teleop_config, "target_z_sign", 1.0)),
+    )
+    position_scale = float(getattr(teleop_config, "position_scale", 0.5))
+    orientation_scale = float(getattr(teleop_config, "orientation_scale", 1.0))
+    position_weight = float(getattr(teleop_config, "position_weight", 200.0))
+    orientation_weight = float(getattr(teleop_config, "orientation_weight", 4.0))
+
+    is_bimanual_gem = getattr(robot_config, "type", None) in {"bi_gem", "bi_gem_follower"}
+    motor_names = [f"{arm}_{name}" for name in GEM_MOTOR_NAMES] if is_bimanual_gem else GEM_MOTOR_NAMES
+    gripper_name = f"{arm}_gripper" if is_bimanual_gem else "gripper"
+
+    kinematics = make_gem_kinematics(arm=arm)
+    teleop_action_processor = RobotProcessorPipeline[tuple[RobotAction, RobotObservation], RobotAction](
+        steps=[
+            MapPhoneActionToRobotAction(
+                platform=teleop_config.phone_os,
+                use_so100_axis_mapping=False,
+                target_x_axis=target_axes[0],
+                target_y_axis=target_axes[1],
+                target_z_axis=target_axes[2],
+                target_x_sign=target_signs[0],
+                target_y_sign=target_signs[1],
+                target_z_sign=target_signs[2],
+                orientation_scale=orientation_scale,
+            ),
+            EEReferenceAndDelta(
+                kinematics=kinematics,
+                end_effector_step_sizes={"x": position_scale, "y": position_scale, "z": position_scale},
+                motor_names=motor_names,
+                use_latched_reference=True,
+                orientation_delta_in_world=True,
+            ),
+            EEBoundsAndSafety(
+                end_effector_bounds={"min": [-1.0, -1.0, -1.0], "max": [1.0, 1.0, 1.0]},
+                max_ee_step_m=0.05,
+            ),
+            GripperVelocityToJoint(
+                speed_factor=20.0,
+                clip_min=0.0,
+                clip_max=100.0,
+                gripper_name=gripper_name,
+            ),
+        ],
+        to_transition=robot_action_observation_to_transition,
+        to_output=transition_to_robot_action,
+    )
+    robot_action_processor = RobotProcessorPipeline[tuple[RobotAction, RobotObservation], RobotAction](
+        steps=[
+            InverseKinematicsEEToJoints(
+                kinematics=kinematics,
+                motor_names=motor_names,
+                initial_guess_current_joints=False,
+                iterations=5,
+                position_weight=position_weight,
+                orientation_weight=orientation_weight,
+                gripper_name=gripper_name,
+                max_position_error_m=0.05,
+                # The kinematics posture task now resolves the redundant elbow deterministically,
+                # so the multi-seed elbow search is no longer needed.
+                joint_selection_weights=[0.5, 1.0, 4.0, 2.0, 1.5, 1.5, 1.0, 0.0],
+            )
+        ],
+        to_transition=robot_action_observation_to_transition,
+        to_output=transition_to_robot_action,
+    )
+    return teleop_action_processor, robot_action_processor, make_default_robot_observation_processor()
+
+
+def _viewer_initial_action(cfg: TeleoperateConfig) -> RobotAction | None:
+    if not (
+        cfg.viewer.only and _is_phone_teleop_config(cfg.teleop) and _is_gem_robot_config(cfg.robot)
+    ):
+        return None
+
+    from lerobot.robots.gem_follower.kinematics import GEM_MOTOR_NAMES
+
+    arm = getattr(getattr(cfg.teleop, "arm", "left"), "value", getattr(cfg.teleop, "arm", "left"))
+    prefix = f"{arm}_" if getattr(cfg.robot, "type", None) in {"bi_gem", "bi_gem_follower"} else ""
+    return {f"{prefix}{name}.pos": 5.0 if name == "gripper" else 0.0 for name in GEM_MOTOR_NAMES}
 
 
 def _get_teleop_action(

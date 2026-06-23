@@ -14,6 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -32,6 +34,19 @@ from lerobot.processor import (
     TransitionKey,
 )
 from lerobot.utils.rotation import Rotation
+
+logger = logging.getLogger(__name__)
+
+
+def _fmt_vec(values: np.ndarray) -> str:
+    return np.array2string(values, precision=3, suppress_small=True)
+
+
+def _ordered_joint_positions(observation: RobotObservation, motor_names: list[str]) -> np.ndarray:
+    missing = [f"{name}.pos" for name in motor_names if f"{name}.pos" not in observation]
+    if missing:
+        raise ValueError(f"Missing required joint observations: {missing}")
+    return np.array([float(observation[f"{name}.pos"]) for name in motor_names], dtype=float)
 
 
 @ProcessorStepRegistry.register("ee_reference_and_delta")
@@ -68,33 +83,21 @@ class EEReferenceAndDelta(RobotActionProcessorStep):
         True  # If True, latch reference on enable; if False, always use current pose
     )
     use_ik_solution: bool = False
+    orientation_delta_in_world: bool = False
 
     reference_ee_pose: np.ndarray | None = field(default=None, init=False, repr=False)
     _prev_enabled: bool = field(default=False, init=False, repr=False)
     _command_when_disabled: np.ndarray | None = field(default=None, init=False, repr=False)
 
     def action(self, action: RobotAction) -> RobotAction:
-        observation = self.transition.get(TransitionKey.OBSERVATION).copy()
-
+        observation = self.transition.get(TransitionKey.OBSERVATION)
         if observation is None:
             raise ValueError("Joints observation is require for computing robot kinematics")
 
         if self.use_ik_solution and "IK_solution" in self.transition.get(TransitionKey.COMPLEMENTARY_DATA):
             q_raw = self.transition.get(TransitionKey.COMPLEMENTARY_DATA)["IK_solution"]
         else:
-            q_raw = np.array(
-                [
-                    float(v)
-                    for k, v in observation.items()
-                    if isinstance(k, str)
-                    and k.endswith(".pos")
-                    and k.removesuffix(".pos") in self.motor_names
-                ],
-                dtype=float,
-            )
-
-        if q_raw is None:
-            raise ValueError("Joints observation is require for computing robot kinematics")
+            q_raw = _ordered_joint_positions(observation, self.motor_names)
 
         # Current pose from FK on measured joints
         t_curr = self.kinematics.forward_kinematics(q_raw)
@@ -128,16 +131,18 @@ class EEReferenceAndDelta(RobotActionProcessorStep):
             )
             r_abs = Rotation.from_rotvec([wx, wy, wz]).as_matrix()
             desired = np.eye(4, dtype=float)
-            desired[:3, :3] = ref[:3, :3] @ r_abs
+            if self.orientation_delta_in_world:
+                desired[:3, :3] = r_abs @ ref[:3, :3]
+            else:
+                desired[:3, :3] = ref[:3, :3] @ r_abs
             desired[:3, 3] = ref[:3, 3] + delta_p
 
             self._command_when_disabled = desired.copy()
         else:
-            # While disabled, keep sending the same command to avoid drift.
-            if self._command_when_disabled is None:
-                # If we've never had an enabled command yet, freeze current FK pose once.
-                self._command_when_disabled = t_curr.copy()
-            desired = self._command_when_disabled.copy()
+            # While disabled, hold the current measured/viewer pose instead of
+            # repeatedly solving the last enabled target.
+            desired = t_curr.copy()
+            self._command_when_disabled = desired.copy()
 
         # Write action fields
         pos = desired[:3, 3]
@@ -149,6 +154,7 @@ class EEReferenceAndDelta(RobotActionProcessorStep):
         action["ee.wy"] = float(tw[1])
         action["ee.wz"] = float(tw[2])
         action["ee.gripper_vel"] = gripper_vel
+        action["ee.enabled"] = enabled
 
         self._prev_enabled = enabled
         return action
@@ -174,7 +180,7 @@ class EEReferenceAndDelta(RobotActionProcessorStep):
         ]:
             features[PipelineFeatureType.ACTION].pop(f"{feat}", None)
 
-        for feat in ["x", "y", "z", "wx", "wy", "wz", "gripper_vel"]:
+        for feat in ["x", "y", "z", "wx", "wy", "wz", "gripper_vel", "enabled"]:
             features[PipelineFeatureType.ACTION][f"ee.{feat}"] = PolicyFeature(
                 type=FeatureType.ACTION, shape=(1,)
             )
@@ -270,6 +276,15 @@ class InverseKinematicsEEToJoints(RobotActionProcessorStep):
     motor_names: list[str]
     q_curr: np.ndarray | None = field(default=None, init=False, repr=False)
     initial_guess_current_joints: bool = True
+    position_weight: float = 1.0
+    orientation_weight: float = 0.01
+    iterations: int = 1
+    gripper_name: str = "gripper"
+    max_position_error_m: float | None = None
+    joint_selection_weights: list[float] | None = None
+    seed_joint_indices: list[int] | None = None
+    seed_offsets_deg: list[float] | None = None
+    _last_reject_t: float = field(default=0.0, init=False, repr=False)
 
     def action(self, action: RobotAction) -> RobotAction:
         x = action.pop("ee.x")
@@ -279,22 +294,18 @@ class InverseKinematicsEEToJoints(RobotActionProcessorStep):
         wy = action.pop("ee.wy")
         wz = action.pop("ee.wz")
         gripper_pos = action.pop("ee.gripper_pos")
+        enabled = bool(action.pop("ee.enabled", True))
 
         if None in (x, y, z, wx, wy, wz, gripper_pos):
             raise ValueError(
                 "Missing required end-effector pose components: ee.x, ee.y, ee.z, ee.wx, ee.wy, ee.wz, ee.gripper_pos must all be present in action"
             )
 
-        observation = self.transition.get(TransitionKey.OBSERVATION).copy()
+        observation = self.transition.get(TransitionKey.OBSERVATION)
         if observation is None:
             raise ValueError("Joints observation is require for computing robot kinematics")
 
-        q_raw = np.array(
-            [float(v) for k, v in observation.items() if isinstance(k, str) and k.endswith(".pos")],
-            dtype=float,
-        )
-        if q_raw is None:
-            raise ValueError("Joints observation is require for computing robot kinematics")
+        q_raw = _ordered_joint_positions(observation, self.motor_names)
 
         if self.initial_guess_current_joints:  # Use current joints as initial guess
             self.q_curr = q_raw
@@ -307,23 +318,135 @@ class InverseKinematicsEEToJoints(RobotActionProcessorStep):
         t_des[:3, :3] = Rotation.from_rotvec([wx, wy, wz]).as_matrix()
         t_des[:3, 3] = [x, y, z]
 
-        # Compute inverse kinematics
-        q_target = self.kinematics.inverse_kinematics(self.q_curr, t_des)
+        if not enabled:
+            q_target = q_raw
+            self.q_curr = q_target
+            for i, name in enumerate(self.motor_names):
+                if name != self.gripper_name:
+                    action[f"{name}.pos"] = float(q_target[i])
+                else:
+                    action[f"{self.gripper_name}.pos"] = float(gripper_pos)
+            return action
+
+        q_reference = self.q_curr.copy()
+
+        # Compute inverse kinematics. For redundant arms, solve from a small
+        # set of nearby seeds and choose the solution with the smoothest
+        # weighted joint-space motion. This keeps the elbow branch continuous.
+        q_target = self._solve_ik_candidates(q_reference, q_raw, t_des, self.orientation_weight)
         self.q_curr = q_target
+
+        solved_pose = None
+        current_pose = None
+        if self.max_position_error_m is not None:
+            solved_pose = self.kinematics.forward_kinematics(q_target)
+            position_error = float(np.linalg.norm(solved_pose[:3, 3] - t_des[:3, 3]))
+            if (
+                self.max_position_error_m is not None
+                and position_error > self.max_position_error_m
+                and self.orientation_weight > 0
+            ):
+                fallback_q = self._solve_ik_candidates(q_reference, q_raw, t_des, 0.0)
+                fallback_pose = self.kinematics.forward_kinematics(fallback_q)
+                fallback_error = float(np.linalg.norm(fallback_pose[:3, 3] - t_des[:3, 3]))
+                if fallback_error < position_error:
+                    q_target = fallback_q
+                    self.q_curr = q_target
+                    solved_pose = fallback_pose
+                    position_error = fallback_error
+            if self.max_position_error_m is not None and position_error > self.max_position_error_m:
+                current_pose = self.kinematics.forward_kinematics(q_raw)
+                now = time.perf_counter()
+                if now - self._last_reject_t > 0.5:
+                    self._last_reject_t = now
+                    logger.warning(
+                        "IK target rejected: desired_pos=%s solved_pos=%s pos_error=%.3f max=%.3f",
+                        _fmt_vec(t_des[:3, 3]),
+                        _fmt_vec(solved_pose[:3, 3]),
+                        position_error,
+                        self.max_position_error_m,
+                    )
+                q_target = q_raw
+                self.q_curr = q_target
+                solved_pose = current_pose
 
         # TODO: This is sentitive to order of motor_names = q_target mapping
         for i, name in enumerate(self.motor_names):
-            if name != "gripper":
+            if name != self.gripper_name:
                 action[f"{name}.pos"] = float(q_target[i])
             else:
-                action["gripper.pos"] = float(gripper_pos)
+                action[f"{self.gripper_name}.pos"] = float(gripper_pos)
 
         return action
+
+    def _solve_ik(
+        self,
+        q0: np.ndarray,
+        t_des: np.ndarray,
+        orientation_weight: float,
+    ) -> np.ndarray:
+        q_target = q0
+        for _ in range(max(1, self.iterations)):
+            q_target = self.kinematics.inverse_kinematics(
+                q_target,
+                t_des,
+                position_weight=self.position_weight,
+                orientation_weight=orientation_weight,
+            )
+        return q_target
+
+    def _solve_ik_candidates(
+        self,
+        q_reference: np.ndarray,
+        q_raw: np.ndarray,
+        t_des: np.ndarray,
+        orientation_weight: float,
+    ) -> np.ndarray:
+        seeds = self._candidate_seeds(q_reference, q_raw)
+        candidates = [self._solve_ik(seed, t_des, orientation_weight) for seed in seeds]
+        return min(candidates, key=lambda q: self._candidate_cost(q, q_reference, t_des, orientation_weight))
+
+    def _candidate_seeds(self, q_reference: np.ndarray, q_raw: np.ndarray) -> list[np.ndarray]:
+        seeds = [q_reference]
+        if not np.allclose(q_reference, q_raw):
+            seeds.append(q_raw)
+
+        if self.seed_joint_indices and self.seed_offsets_deg:
+            for index in self.seed_joint_indices:
+                if index < 0 or index >= len(q_reference):
+                    continue
+                for offset in self.seed_offsets_deg:
+                    seed = q_reference.copy()
+                    seed[index] += float(offset)
+                    seeds.append(seed)
+
+        return seeds
+
+    def _candidate_cost(
+        self,
+        q: np.ndarray,
+        q_reference: np.ndarray,
+        t_des: np.ndarray,
+        orientation_weight: float,
+    ) -> float:
+        pose = self.kinematics.forward_kinematics(q)
+        pos_error = float(np.linalg.norm(pose[:3, 3] - t_des[:3, 3]))
+        rot_error = Rotation.from_matrix(pose[:3, :3].T @ t_des[:3, :3]).as_rotvec()
+        rot_error_norm = float(np.linalg.norm(rot_error))
+
+        weights = np.ones_like(q_reference, dtype=float)
+        if self.joint_selection_weights is not None:
+            provided = np.asarray(self.joint_selection_weights, dtype=float)
+            weights[: min(len(weights), len(provided))] = provided[: min(len(weights), len(provided))]
+
+        joint_delta = np.asarray(q - q_reference, dtype=float)
+        joint_cost = float(np.linalg.norm(weights * joint_delta))
+        return pos_error * 10000.0 + rot_error_norm * float(orientation_weight) * 100.0 + joint_cost
 
     def transform_features(
         self, features: dict[PipelineFeatureType, dict[str, PolicyFeature]]
     ) -> dict[PipelineFeatureType, dict[str, PolicyFeature]]:
-        for feat in ["x", "y", "z", "wx", "wy", "wz", "gripper_pos"]:
+        for feat in ["x", "y", "z", "wx", "wy", "wz", "gripper_pos", "enabled"]:
             features[PipelineFeatureType.ACTION].pop(f"ee.{feat}", None)
 
         for name in self.motor_names:
@@ -360,21 +483,19 @@ class GripperVelocityToJoint(RobotActionProcessorStep):
     clip_min: float = 0.0
     clip_max: float = 100.0
     discrete_gripper: bool = False
+    gripper_name: str = "gripper"
 
     def action(self, action: RobotAction) -> RobotAction:
-        observation = self.transition.get(TransitionKey.OBSERVATION).copy()
+        observation = self.transition.get(TransitionKey.OBSERVATION)
 
         gripper_vel = action.pop("ee.gripper_vel")
 
         if observation is None:
             raise ValueError("Joints observation is require for computing robot kinematics")
 
-        q_raw = np.array(
-            [float(v) for k, v in observation.items() if isinstance(k, str) and k.endswith(".pos")],
-            dtype=float,
-        )
-        if q_raw is None:
-            raise ValueError("Joints observation is require for computing robot kinematics")
+        gripper_key = f"{self.gripper_name}.pos"
+        if gripper_key not in observation:
+            raise ValueError(f"Missing required gripper observation: {gripper_key}")
 
         if self.discrete_gripper:
             # Discrete gripper actions are in [0, 1, 2]
@@ -384,8 +505,7 @@ class GripperVelocityToJoint(RobotActionProcessorStep):
 
         # Compute desired gripper position
         delta = gripper_vel * float(self.speed_factor)
-        # TODO: This assumes gripper is the last specified joint in the robot
-        gripper_pos = float(np.clip(q_raw[-1] + delta, self.clip_min, self.clip_max))
+        gripper_pos = float(np.clip(float(observation[gripper_key]) + delta, self.clip_min, self.clip_max))
         action["ee.gripper_pos"] = gripper_pos
 
         return action
@@ -554,16 +674,11 @@ class InverseKinematicsRLStep(ProcessorStep):
                 "Missing required end-effector pose components: ee.x, ee.y, ee.z, ee.wx, ee.wy, ee.wz, ee.gripper_pos must all be present in action"
             )
 
-        observation = new_transition.get(TransitionKey.OBSERVATION).copy()
+        observation = new_transition.get(TransitionKey.OBSERVATION)
         if observation is None:
             raise ValueError("Joints observation is require for computing robot kinematics")
 
-        q_raw = np.array(
-            [float(v) for k, v in observation.items() if isinstance(k, str) and k.endswith(".pos")],
-            dtype=float,
-        )
-        if q_raw is None:
-            raise ValueError("Joints observation is require for computing robot kinematics")
+        q_raw = _ordered_joint_positions(observation, self.motor_names)
 
         if self.initial_guess_current_joints:  # Use current joints as initial guess
             self.q_curr = q_raw

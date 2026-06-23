@@ -79,6 +79,10 @@ def make_teleoperator_from_config(config: TeleoperatorConfig) -> "Teleoperator":
         from .hand_teleop.hand_teleop import HandTeleop
 
         return HandTeleop(config)
+    elif config.type == "phone":
+        from .phone import Phone
+
+        return Phone(config)
     elif config.type == "unitree_g1":
         from .unitree_g1 import UnitreeG1Teleoperator
 

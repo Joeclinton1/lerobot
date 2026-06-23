@@ -71,6 +71,14 @@ class BasePhone:
         # No haptic or other feedback implemented yet
         pass
 
+    def _disabled_action(self) -> dict:
+        return {
+            "phone.pos": np.zeros(3, dtype=float),
+            "phone.rot": Rotation.from_rotvec(np.zeros(3, dtype=float)),
+            "phone.raw_inputs": {},
+            "phone.enabled": False,
+        }
+
     def configure(self) -> None:
         # No additional configuration required for phone teleop
         pass
@@ -95,7 +103,7 @@ class IOSPhone(BasePhone, Teleoperator):
         return self._group is not None
 
     @check_if_already_connected
-    def connect(self) -> None:
+    def connect(self, calibrate: bool = True) -> None:
         logger.info("Connecting to IPhone, make sure to open the HEBI Mobile I/O app.")
         lookup = hebi.Lookup()
         time.sleep(2.0)
@@ -105,11 +113,12 @@ class IOSPhone(BasePhone, Teleoperator):
         self._group = group
         logger.info(f"{self} connected to HEBI group with {group.size} module(s).")
 
-        self.calibrate()
+        if calibrate:
+            self.calibrate()
 
     def calibrate(self) -> None:
         print(
-            "Hold the phone so that: top edge points forward in same direction as the robot (robot +x) and screen points up (robot +z)"
+            "Hold the phone so that: top edge points forward, same direction the arm faces (viewer -Z), and screen points up (viewer +Y)"
         )
         print("Press and hold B1 in the HEBI Mobile I/O app to capture this pose...\n")
         position, rotation = self._wait_for_capture_trigger()
@@ -179,7 +188,7 @@ class IOSPhone(BasePhone, Teleoperator):
     def get_action(self) -> dict:
         has_pose, raw_position, raw_rotation, fb_pose = self._read_current_pose()
         if not has_pose or not self.is_calibrated:
-            return {}
+            return self._disabled_action()
 
         # Collect raw inputs (B1 / analogs on iOS, move/scale on Android)
         raw_inputs: dict[str, float | int | bool] = {}
@@ -240,7 +249,7 @@ class AndroidPhone(BasePhone, Teleoperator):
         return self._teleop is not None
 
     @check_if_already_connected
-    def connect(self) -> None:
+    def connect(self, calibrate: bool = True) -> None:
         logger.info("Starting teleop stream for Android...")
         self._teleop = Teleop()
         self._teleop.subscribe(self._android_callback)
@@ -248,11 +257,12 @@ class AndroidPhone(BasePhone, Teleoperator):
         self._teleop_thread.start()
         logger.info(f"{self} connected, teleop stream started.")
 
-        self.calibrate()
+        if calibrate:
+            self.calibrate()
 
     def calibrate(self) -> None:
         print(
-            "Hold the phone so that: top edge points forward in same direction as the robot (robot +x) and screen points up (robot +z)"
+            "Hold the phone so that: top edge points forward, same direction the arm faces (viewer -Z), and screen points up (viewer +Y)"
         )
         print("Touch and move on the WebXR page to capture this pose...\n")
 
@@ -307,7 +317,7 @@ class AndroidPhone(BasePhone, Teleoperator):
             p = self._latest_pose.copy()
             pose = self._latest_pose
         rot = Rotation.from_matrix(p[:3, :3])
-        pos = p[:3, 3] - rot.apply(self.config.camera_offset)
+        pos = p[:3, 3]
         return True, pos, rot, pose
 
     def _android_callback(self, pose: np.ndarray, message: dict) -> None:
@@ -332,7 +342,7 @@ class AndroidPhone(BasePhone, Teleoperator):
     def get_action(self) -> dict:
         ok, raw_pos, raw_rot, pose = self._read_current_pose()
         if not ok or not self.is_calibrated:
-            return {}
+            return self._disabled_action()
 
         # Collect raw inputs (B1 / analogs on iOS, move/scale on Android)
         raw_inputs: dict[str, float | int | bool] = {}
@@ -347,8 +357,11 @@ class AndroidPhone(BasePhone, Teleoperator):
         # Rising edge then re-capture calibration immediately from current raw pose
         if enable and not self._enabled:
             self._reapply_position_calibration(raw_pos)
+            self._calib_rot_inv = raw_rot.inv()
 
-        # Apply calibration
+        # Android/WebXR pose positions are in the XR session world frame. The
+        # teleop package first maps raw WebXR R/U/B axes into F/L/U, so after
+        # calibration the physical phone axes are top=-x, left=-y, screen=+z.
         pos_cal = self._calib_rot_inv.apply(raw_pos - self._calib_pos)
         rot_cal = self._calib_rot_inv * raw_rot
 
@@ -399,8 +412,8 @@ class Phone(Teleoperator):
     def is_connected(self) -> bool:
         return self._phone_impl.is_connected
 
-    def connect(self) -> None:
-        return self._phone_impl.connect()
+    def connect(self, calibrate: bool = True) -> None:
+        return self._phone_impl.connect(calibrate=calibrate)
 
     def calibrate(self) -> None:
         return self._phone_impl.calibrate()
