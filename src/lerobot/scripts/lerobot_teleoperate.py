@@ -142,6 +142,28 @@ class TeleoperateConfig:
     viewer: RobotArmViewerConfig = field(default_factory=RobotArmViewerConfig)
 
 
+def _send_rate_limit_haptic(teleop: Teleoperator, robot_action_processor) -> None:
+    """Forward the joint-rate limiter's clamp pressure (0..1) to the
+    teleoperator as a haptic cue. Only the phone teleop consumes it (WebXR
+    controller buzz); other teleops are skipped so their send_feedback isn't
+    invoked. Reads the runtime ``last_clamp_intensity`` left on the
+    JointRateLimit step by the most recent action()."""
+    if getattr(teleop, "name", None) != "phone":
+        return
+    intensity = 0.0
+    for step in getattr(robot_action_processor, "steps", []):
+        intensity = max(intensity, float(getattr(step, "last_clamp_intensity", 0.0)))
+    # Only emit when there's real clamp pressure: the client buzz is a short
+    # one-shot pulse that lapses on its own, so silence == not sending. Avoids
+    # spamming a zero-intensity message to all clients every loop tick.
+    if intensity <= 0.02:
+        return
+    try:
+        teleop.send_feedback({"haptic": intensity})
+    except Exception:
+        pass
+
+
 def teleop_loop(
     teleop: Teleoperator,
     robot: Robot,
@@ -206,6 +228,11 @@ def teleop_loop(
 
         # Send processed action to robot (robot_action_processor.to_output should return RobotAction)
         sent_action = robot.send_action(robot_action_to_send)
+
+        # Haptic feedback: surface the joint-rate limiter's clamp pressure to
+        # the teleoperator (phone/WebXR pulses the controller when you push
+        # past the safe per-step joint motion). No-op for teleops without it.
+        _send_rate_limit_haptic(teleop, robot_action_processor)
         if robot.name == "none" and _is_joint_position_action(sent_action):
             viewer_action_state = dict(sent_action)
         if viewer is not None:
@@ -417,7 +444,11 @@ def _make_phone_to_gem_processors(teleop_config: TeleoperatorConfig, robot_confi
             ),
             EEBoundsAndSafety(
                 end_effector_bounds={"min": [-1.0, -1.0, -1.0], "max": [1.0, 1.0, 1.0]},
-                max_ee_step_m=0.05,
+                # Cartesian teleport guard only -- generous enough to pass natural
+                # 1:1 hand motion (0.15 m/step is ~4.5 m/s at 30 Hz) so it no longer
+                # rate-limits normal moves; per-step smoothness is owned by the
+                # downstream JointRateLimit.
+                max_ee_step_m=0.15,
             ),
             GripperVelocityToJoint(
                 speed_factor=20.0,

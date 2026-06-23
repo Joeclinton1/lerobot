@@ -48,7 +48,7 @@ class PhoneConfig(TeleoperatorConfig):
     target_x_sign: float = 1.0
     target_y_sign: float = 1.0
     target_z_sign: float = 1.0
-    position_scale: float = 0.5
+    position_scale: float = 1.0
     orientation_scale: float = 1.0
     # IK soft-task weights. A large position weight keeps the solved pose from lagging behind the
     # target (the soft-task steady-state offset scales with 1/position_weight); orientation is kept

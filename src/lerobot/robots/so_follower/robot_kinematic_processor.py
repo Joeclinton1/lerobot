@@ -227,13 +227,16 @@ class EEBoundsAndSafety(RobotActionProcessorStep):
         # Clip position
         pos = np.clip(pos, self.end_effector_bounds["min"], self.end_effector_bounds["max"])
 
-        # Check for jumps in position
+        # Rate-limit position jumps: if the commanded step exceeds max_ee_step_m,
+        # clamp it to that magnitude (preserving direction) so a bad tracking
+        # jump degrades into a bounded slew instead of a teleport. Previously
+        # this raised, which crashed the loop on any fast/large motion -- the
+        # downstream joint-space limiter is the harder per-step safety net.
         if self._last_pos is not None:
             dpos = pos - self._last_pos
             n = float(np.linalg.norm(dpos))
             if n > self.max_ee_step_m and n > 0:
                 pos = self._last_pos + dpos * (self.max_ee_step_m / n)
-                raise ValueError(f"EE jump {n:.3f}m > {self.max_ee_step_m}m")
 
         self._last_pos = pos
 
@@ -514,10 +517,18 @@ class JointRateLimit(RobotActionProcessorStep):
         deltas = target - current
 
         max_abs = float(np.max(np.abs(deltas))) if deltas.size else 0.0
+        intensity = 0.0
         if max_abs > self.max_joint_step_deg:
             limited = current + deltas * (self.max_joint_step_deg / max_abs)
             for key, value in zip(keys, limited, strict=True):
                 action[key] = float(value)
+            # How hard we throttled, as a 0..1 cue for haptic feedback:
+            # 0 when just at the cap, saturating to 1 once a joint is
+            # commanded >= 2x the cap (i.e. you're pushing well past safe).
+            intensity = min(1.0, (max_abs / self.max_joint_step_deg) - 1.0)
+        # Read by the teleop loop to drive controller haptics; plain runtime
+        # attribute (not a dataclass field) so it stays out of the step config.
+        self.last_clamp_intensity = float(intensity)
         return action
 
     def transform_features(

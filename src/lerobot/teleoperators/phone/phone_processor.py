@@ -151,6 +151,17 @@ class MapPhoneActionToRobotAction(RobotActionProcessorStep):
             action["target_wx"] = float(target_rot[0]) if enabled else 0.0
             action["target_wy"] = float(target_rot[1]) if enabled else 0.0
             action["target_wz"] = float(target_rot[2]) if enabled else 0.0
+
+            # VR controllers rest ~180° in yaw from the phone pose this axis
+            # mapping was tuned for, so forward/back and left/right come out
+            # inverted. Correct with a 180° yaw about GEM up (+Y, which is
+            # target_y here): negate the two horizontal components of both
+            # position and rotation, leaving the vertical axis untouched.
+            if str(inputs.get("device", "")).upper() == "VR":
+                action["target_x"] = -action["target_x"]
+                action["target_z"] = -action["target_z"]
+                action["target_wx"] = -action["target_wx"]
+                action["target_wz"] = -action["target_wz"]
         action["gripper_vel"] = gripper_vel  # Still send gripper action when disabled
         return action
 

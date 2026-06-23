@@ -84,8 +84,10 @@ class BasePhone:
         pass
 
     def send_feedback(self, feedback: dict[str, float]) -> None:
-        # We could add haptic feedback (vibrations) here, but it's not implemented yet
-        raise NotImplementedError
+        # Default no-op; WebXR-backed implementations (Android) override this
+        # to forward a haptic cue to the controller. iOS/HEBI has no web
+        # client, so feedback is silently dropped there.
+        pass
 
 
 class IOSPhone(BasePhone, Teleoperator):
@@ -350,6 +352,10 @@ class AndroidPhone(BasePhone, Teleoperator):
         raw_inputs["move"] = bool(msg.get("move", False))
         raw_inputs["scale"] = float(msg.get("scale", 1.0))
         raw_inputs["gripper"] = float(msg.get("gripper", 0.0))
+        # "Phone" (screen viewer pose) or "VR" (controller). Downstream axis
+        # mapping applies a VR-only yaw correction (controller rests ~180°
+        # from the phone frame the mapping was tuned for).
+        raw_inputs["device"] = str(msg.get("device", "Phone"))
         raw_inputs["reservedButtonA"] = bool(msg.get("reservedButtonA", False))
         raw_inputs["reservedButtonB"] = bool(msg.get("reservedButtonB", False))
 
@@ -361,9 +367,23 @@ class AndroidPhone(BasePhone, Teleoperator):
             self._calib_rot_inv = raw_rot.inv()
 
         # Android/WebXR pose positions are in the XR session world frame. The
-        # teleop package first maps raw WebXR R/U/B axes into F/L/U, so after
-        # calibration the physical phone axes are top=-x, left=-y, screen=+z.
-        pos_cal = self._calib_rot_inv.apply(raw_pos - self._calib_pos)
+        # teleop package first maps raw WebXR R/U/B axes into F/L/U.
+        #
+        # Phone: rotate the translation delta into the device's grab frame, so
+        # after calibration the physical phone axes are top=-x, left=-y,
+        # screen=+z (you aim with the phone, so motion is phone-relative).
+        #
+        # VR controller: keep translation WORLD-referenced -- don't rotate by
+        # the grab orientation. You move your hand in the room, not relative to
+        # where the controller points, so hand-right -> robot-right regardless
+        # of how the controller is tilted. The downstream axis mapping
+        # (+ the VR yaw correction) turns this F/L/U world delta into GEM axes.
+        # Orientation stays relative for wrist control either way.
+        delta = raw_pos - self._calib_pos
+        if str(raw_inputs.get("device", "")).upper() == "VR":
+            pos_cal = delta
+        else:
+            pos_cal = self._calib_rot_inv.apply(delta)
         rot_cal = self._calib_rot_inv * raw_rot
 
         self._enabled = enable
@@ -374,6 +394,15 @@ class AndroidPhone(BasePhone, Teleoperator):
             "phone.raw_inputs": raw_inputs,
             "phone.enabled": self._enabled,
         }
+
+    def send_feedback(self, feedback: dict[str, float]) -> None:
+        """Forward a haptic cue to the WebXR client. ``feedback["haptic"]`` is
+        a 0..1 intensity (e.g. the joint-rate limiter's clamp pressure). The
+        browser pulses the controller proportionally."""
+        if self._teleop is None:
+            return
+        intensity = float(feedback.get("haptic", 0.0))
+        self._teleop.publish({"type": "haptic", "intensity": max(0.0, min(1.0, intensity))})
 
     @check_if_not_connected
     def disconnect(self) -> None:
