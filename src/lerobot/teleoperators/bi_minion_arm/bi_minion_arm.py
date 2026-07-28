@@ -18,8 +18,38 @@ _CAPTURED_POSE_DEGREES = {
     "joint_4": -20.0,
     "joint_6": 70.0,
 }
+_STS3215_RESOLUTION = 4096
 _STS3215_MAX_RESOLUTION = 4095
 _RIGHT_MIRRORED_JOINTS = ("joint_1", "joint_3", "joint_5", "joint_7")
+
+
+def _wrap_homing_offset(offset: int, resolution: int = _STS3215_RESOLUTION) -> int:
+    """Map an offset to the equivalent value supported by a single-turn servo."""
+    half_turn = resolution // 2
+    max_magnitude = half_turn - 1
+    wrapped_offset = (offset + half_turn) % resolution - half_turn
+
+    # An 11-bit sign-magnitude register cannot represent exactly half a turn.
+    # Preserve the original direction and accept a one-tick error in this edge case.
+    if wrapped_offset == -half_turn:
+        return max_magnitude if offset >= 0 else -max_magnitude
+
+    return wrapped_offset
+
+
+def _get_gripper_calibration(
+    gripper: str, zero_position: int, hundred_position: int
+) -> tuple[int, int, int]:
+    """Return drive mode and ascending limits for two captured gripper positions."""
+    if hundred_position == zero_position:
+        raise ValueError(
+            f"Invalid {gripper} calibration: 0% and 100% points are both {zero_position}."
+        )
+
+    if hundred_position > zero_position:
+        return 0, zero_position, hundred_position
+
+    return 1, hundred_position, zero_position
 
 
 class BiMinionArm(Teleoperator):
@@ -97,11 +127,6 @@ class BiMinionArm(Teleoperator):
     def is_calibrated(self) -> bool:
         return self.bus.is_calibrated
 
-    def _force_gripper_drive_mode(self, drive_mode: int = 0) -> None:
-        for gripper in ("left_gripper", "right_gripper"):
-            if gripper in self.calibration:
-                self.calibration[gripper].drive_mode = drive_mode
-
     def _apply_captured_pose_biases(self, homing_offsets: dict[str, int]) -> dict[str, int]:
         adjusted_offsets = homing_offsets.copy()
         for side in ("left", "right"):
@@ -112,7 +137,15 @@ class BiMinionArm(Teleoperator):
                 model = self.bus.motors[motor_name].model
                 max_res = self.bus.model_resolution_table[model] - 1
                 ticks = int(round(captured_pose_deg * max_res / 360))
-                adjusted_offsets[motor_name] -= ticks
+                unwrapped_offset = adjusted_offsets[motor_name] - ticks
+                adjusted_offsets[motor_name] = _wrap_homing_offset(unwrapped_offset, max_res + 1)
+                if adjusted_offsets[motor_name] != unwrapped_offset:
+                    logger.info(
+                        "Wrapped %s homing offset from %d to %d",
+                        motor_name,
+                        unwrapped_offset,
+                        adjusted_offsets[motor_name],
+                    )
         return adjusted_offsets
 
     def calibrate(self) -> None:
@@ -122,7 +155,6 @@ class BiMinionArm(Teleoperator):
                 "or type 'c' and press ENTER to run calibration: "
             )
             if user_input.strip().lower() != "c":
-                self._force_gripper_drive_mode(drive_mode=0)
                 logger.info("Writing calibration file associated with the id %s to the motors", self.id)
                 self.bus.write_calibration(self.calibration)
                 self._save_calibration()
@@ -155,26 +187,31 @@ class BiMinionArm(Teleoperator):
 
         range_mins = dict.fromkeys(self.bus.motors, 0)
         range_maxes = dict.fromkeys(self.bus.motors, 4095)
+        drive_modes = dict.fromkeys(self.bus.motors, 0)
 
         for gripper in ("left_gripper", "right_gripper"):
             input(f"\n{gripper} calibration: Move to desired 0% position and press ENTER...")
             gripper_zero = int(self.bus.read("Present_Position", gripper, normalize=False))
             input(f"{gripper} calibration: Move to desired 100% position and press ENTER...")
-            gripper_max = int(self.bus.read("Present_Position", gripper, normalize=False))
+            gripper_hundred = int(self.bus.read("Present_Position", gripper, normalize=False))
 
-            if gripper_max <= gripper_zero:
-                raise ValueError(
-                    f"Invalid {gripper} calibration: 100% point ({gripper_max}) must be greater than "
-                    f"0% point ({gripper_zero})."
+            drive_mode, range_min, range_max = _get_gripper_calibration(
+                gripper, gripper_zero, gripper_hundred
+            )
+            drive_modes[gripper] = drive_mode
+            range_mins[gripper] = range_min
+            range_maxes[gripper] = range_max
+            if drive_mode:
+                logger.info(
+                    "%s encoder decreases from 0%% to 100%%; using inverted drive mode",
+                    gripper,
                 )
-            range_mins[gripper] = gripper_zero
-            range_maxes[gripper] = gripper_max
 
         self.calibration = {}
         for motor, m in self.bus.motors.items():
             self.calibration[motor] = MotorCalibration(
                 id=m.id,
-                drive_mode=0,
+                drive_mode=drive_modes[motor],
                 homing_offset=homing_offsets[motor],
                 range_min=range_mins[motor],
                 range_max=range_maxes[motor],
