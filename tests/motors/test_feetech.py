@@ -112,6 +112,52 @@ def test_abc_implementation(dummy_motors):
     FeetechMotorsBus(port="/dev/dummy-port", motors=dummy_motors)
 
 
+@pytest.mark.parametrize(
+    ("drive_mode", "expected"),
+    [
+        (0, 90.0),
+        (1, -90.0),
+    ],
+)
+def test_normalize_degrees_applies_drive_mode(drive_mode, expected):
+    motors = {"joint": Motor(1, "sts3215", MotorNormMode.DEGREES)}
+    calibration = {
+        "joint": MotorCalibration(
+            id=1,
+            drive_mode=drive_mode,
+            homing_offset=0,
+            range_min=0,
+            range_max=4095,
+        )
+    }
+    bus = FeetechMotorsBus(port="/dev/dummy-port", motors=motors, calibration=calibration)
+
+    assert bus._normalize({1: 3071.25})[1] == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    ("drive_mode", "expected"),
+    [
+        (0, 3071),
+        (1, 1023),
+    ],
+)
+def test_unnormalize_degrees_applies_drive_mode(drive_mode, expected):
+    motors = {"joint": Motor(1, "sts3215", MotorNormMode.DEGREES)}
+    calibration = {
+        "joint": MotorCalibration(
+            id=1,
+            drive_mode=drive_mode,
+            homing_offset=0,
+            range_min=0,
+            range_max=4095,
+        )
+    }
+    bus = FeetechMotorsBus(port="/dev/dummy-port", motors=motors, calibration=calibration)
+
+    assert bus._unnormalize({1: 90.0})[1] == expected
+
+
 @pytest.mark.parametrize("id_", [1, 2, 3])
 def test_ping(id_, mock_motors, dummy_motors):
     expected_model_nb = MODEL_NUMBER_TABLE[dummy_motors[f"dummy_{id_}"].model]
